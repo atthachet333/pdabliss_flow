@@ -1,0 +1,42 @@
+{
+  "name": "pdabliss-flow",
+  "version": "0.0.0",
+  "private": true,
+  "description": "PDA BLISS FLOW — Shared Calendar & LINE Personal Assistant (Sally). EP00 foundation.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "packages/shared",
+    "packages/design-system",
+    "apps/api",
+    "apps/worker",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:shared": "npm run build -w @flow/shared",
+    "build": "npm run build:shared && npm run build -w @flow/api -w @flow/worker -w @flow/web && node scripts/check-showcase-excluded.mjs",
+    "build:showcase": "npm run build:shared && npm run build:showcase -w @flow/web",
+    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run build:shared && npm run test --workspaces --if-present",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "brand:generate": "node scripts/generate-brand-assets.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/node": "^22.18.0",
+    "eslint": "^9.36.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.4.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.5",
+    "typescript": "~5.9.2",
+    "typescript-eslint": "^8.44.0"
+  }
+}

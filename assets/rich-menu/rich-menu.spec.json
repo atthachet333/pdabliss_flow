@@ -1,0 +1,70 @@
+{
+  "$comment": "EP00 CONCEPT ONLY — not uploaded or registered. URIs use the owner-created LIFF app (non-secret ID). Export the image to PNG/JPEG <= 1 MB at 2500x1686 before upload (EP05).",
+  "size": { "width": 2500, "height": 1686 },
+  "selected": true,
+  "name": "flow-main-v0",
+  "chatBarText": "เมนู FLOW",
+  "image": "assets/rich-menu/rich-menu-concept.svg",
+  "areas": [
+    {
+      "key": "A",
+      "label": "วันนี้",
+      "bounds": { "x": 0, "y": 0, "width": 833, "height": 843 },
+      "action": {
+        "type": "uri",
+        "label": "วันนี้",
+        "uri": "https://liff.line.me/2012804685-QPWPdFGL/today"
+      }
+    },
+    {
+      "key": "B",
+      "label": "เพิ่มนัดหมาย",
+      "bounds": { "x": 833, "y": 0, "width": 834, "height": 843 },
+      "action": {
+        "type": "uri",
+        "label": "เพิ่มนัดหมาย",
+        "uri": "https://liff.line.me/2012804685-QPWPdFGL/appointments/new"
+      }
+    },
+    {
+      "key": "C",
+      "label": "ปฏิทิน",
+      "bounds": { "x": 1667, "y": 0, "width": 833, "height": 843 },
+      "action": {
+        "type": "uri",
+        "label": "ปฏิทิน",
+        "uri": "https://liff.line.me/2012804685-QPWPdFGL/calendar"
+      }
+    },
+    {
+      "key": "D",
+      "label": "กลุ่มของฉัน",
+      "bounds": { "x": 0, "y": 843, "width": 833, "height": 843 },
+      "action": {
+        "type": "uri",
+        "label": "กลุ่มของฉัน",
+        "uri": "https://liff.line.me/2012804685-QPWPdFGL/groups"
+      }
+    },
+    {
+      "key": "E",
+      "label": "ประวัติ",
+      "bounds": { "x": 833, "y": 843, "width": 834, "height": 843 },
+      "action": {
+        "type": "uri",
+        "label": "ประวัติ",
+        "uri": "https://liff.line.me/2012804685-QPWPdFGL/history"
+      }
+    },
+    {
+      "key": "F",
+      "label": "ตั้งค่า",
+      "bounds": { "x": 1667, "y": 843, "width": 833, "height": 843 },
+      "action": {
+        "type": "uri",
+        "label": "ตั้งค่า",
+        "uri": "https://liff.line.me/2012804685-QPWPdFGL/settings"
+      }
+    }
+  ]
+}

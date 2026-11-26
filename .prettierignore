@@ -1,0 +1,8 @@
+node_modules
+dist
+dist-showcase
+coverage
+.qa
+package-lock.json
+assets/**/*.svg
+docs/MASTER-SPECIFICATION.md

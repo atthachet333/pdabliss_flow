@@ -1,0 +1,130 @@
+/*
+ * FLOW design tokens (CSS). Mirrors src/tokens.ts — keep both in sync
+ * (tests/tokens.test.ts fails if a TS colour is missing here).
+ */
+:root {
+  /* Brand */
+  --flow-forest: #0b211c;
+  --flow-emerald: #16836b;
+  --flow-emerald-700: #127261;
+  --flow-mint: #a5efcb;
+  --flow-ivory: #f8f7f2;
+  --flow-graphite: #202923;
+
+  /* Sally */
+  --sally-blue: #a8d2e8;
+  --sally-ice: #eaf5fc;
+  --sally-silver: #c8d9e6;
+  --sally-deep-blue: #34566e;
+  --sally-muted-blue: #517f9f;
+
+  /* Neutrals */
+  --ink: #1b2420;
+  --ink-muted: #55605a;
+  --line: #e3e1d8;
+  --line-strong: #cfccc0;
+  --surface: #ffffff;
+  --canvas: var(--flow-ivory);
+
+  /* Feedback */
+  --success: #127261;
+  --warning: #8a5a00;
+  --warning-tint: #fff6e5;
+  --danger: #b3261e;
+  --danger-tint: #fdedeb;
+  --info: #34566e;
+  --info-tint: #eaf5fc;
+
+  /* Category themes: accent / tint / ink / highlight */
+  --cat-family-accent: #a8435b;
+  --cat-family-tint: #fbeff2;
+  --cat-family-ink: #6e2236;
+  --cat-family-highlight: #f2c7d1;
+  --cat-business-accent: #1f3a5f;
+  --cat-business-tint: #eaf0f7;
+  --cat-business-ink: #142740;
+  --cat-business-highlight: #16836b;
+  --cat-personal-accent: #5e4f8c;
+  --cat-personal-tint: #f1eef8;
+  --cat-personal-ink: #3b3060;
+  --cat-personal-highlight: #cfc6e8;
+  --cat-health-accent: #0e7175;
+  --cat-health-tint: #e5f4f3;
+  --cat-health-ink: #0a4f52;
+  --cat-health-highlight: #a6dcd8;
+  --cat-special-accent: #8a6420;
+  --cat-special-tint: #faf3e3;
+  --cat-special-ink: #5e4313;
+  --cat-special-highlight: #d9b970;
+  --cat-urgent-accent: #b3261e;
+  --cat-urgent-tint: #fdedeb;
+  --cat-urgent-ink: #7a1b15;
+  --cat-urgent-highlight: #f4b183;
+  --cat-brand-accent: #0b211c;
+  --cat-brand-tint: #eef6f2;
+  --cat-brand-ink: #0b211c;
+  --cat-brand-highlight: #a5efcb;
+  --cat-neutral-accent: #5b6660;
+  --cat-neutral-tint: #f0f1ee;
+  --cat-neutral-ink: #202923;
+  --cat-neutral-highlight: #c9cec9;
+
+  /* Typography */
+  --font-sans:
+    'IBM Plex Sans Thai', 'Noto Sans Thai', 'Leelawadee UI', 'Tahoma', system-ui, sans-serif;
+  --lh-body: 1.65;
+  --lh-heading: 1.35;
+  --fs-xs: 0.8125rem; /* 13px — minimum */
+  --fs-sm: 0.875rem;
+  --fs-base: 1rem;
+  --fs-md: 1.125rem;
+  --fs-lg: 1.3125rem;
+  --fs-xl: 1.625rem;
+  --fs-2xl: 2rem;
+  --fs-3xl: 2.5rem;
+  --fs-display: clamp(2.25rem, 6vw, 3.25rem);
+
+  /* Spacing (4px grid) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* Radius */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-xl: 26px;
+  --r-pill: 999px;
+
+  /* Elevation — soft, warm, low-contrast */
+  --shadow-1: 0 1px 2px rgba(11, 33, 28, 0.06), 0 1px 1px rgba(11, 33, 28, 0.04);
+  --shadow-2: 0 6px 18px -6px rgba(11, 33, 28, 0.14), 0 2px 4px rgba(11, 33, 28, 0.05);
+  --shadow-3: 0 24px 48px -16px rgba(11, 33, 28, 0.28), 0 4px 10px rgba(11, 33, 28, 0.06);
+
+  /* Focus */
+  --focus-ring: 0 0 0 3px var(--flow-ivory), 0 0 0 5px var(--flow-emerald-700);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 360ms;
+
+  /* Touch */
+  --touch-min: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}

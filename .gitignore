@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-showcase/
+*.tsbuildinfo
+.vite/
+
+# Test / coverage / browser artifacts
+coverage/
+playwright-report/
+test-results/
+
+# Local QA logs (gate logs are summarised in docs/EP00-REPORT.md)
+.qa/
+
+# Environment & secrets — never commit real values
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Runtime
+logs/
+*.log
+npm-debug.log*
+*.pid
+
+# Database dumps
+*.dump
+*.sql.gz
+*.backup
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.tmp
+~$*

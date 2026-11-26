@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" role="img" aria-labelledby="t">
+  <title id="t">Sally — empty</title>
+  
+  <defs>
+    <linearGradient id="s-empty-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C9E1F2"/><stop offset="0.6" stop-color="#A9CDE6"/><stop offset="1" stop-color="#86B0CF"/>
+    </linearGradient>
+    <linearGradient id="s-empty-face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBFAFF"/><stop offset="1" stop-color="#E6E4F3"/>
+    </linearGradient>
+    <linearGradient id="s-empty-silver" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F5F8FB"/><stop offset="1" stop-color="#D9E3EC"/>
+    </linearGradient>
+    <radialGradient id="s-empty-iris" cx="0.45" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#3FB894"/><stop offset="0.55" stop-color="#0F6B55"/><stop offset="1" stop-color="#0A3F33"/>
+    </radialGradient>
+  </defs>
+  <!-- ground shadow -->
+  <ellipse cx="120" cy="226" rx="92" ry="7" fill="#0B211C" opacity="0.10"/>
+  <!-- wheels -->
+  <rect x="48" y="190" width="34" height="34" rx="12" fill="#2A323C"/>
+  <rect x="158" y="190" width="34" height="34" rx="12" fill="#2A323C"/>
+  <circle cx="65" cy="210" r="9" fill="url(#s-empty-silver)"/>
+  <circle cx="175" cy="210" r="9" fill="url(#s-empty-silver)"/>
+  <path d="M65 213.15 C60.1 209.65 61.85 205.8 65 208.425 C68.15 205.8 69.9 209.65 65 213.15 Z" fill="#16836B" /><path d="M175 213.15 C170.1 209.65 171.85 205.8 175 208.425 C178.15 205.8 179.9 209.65 175 213.15 Z" fill="#16836B" />
+  <!-- mirrors -->
+  <ellipse cx="40" cy="128" rx="11" ry="8" fill="url(#s-empty-silver)" stroke="#8FA3B5" stroke-width="1.2"/>
+  <ellipse cx="200" cy="128" rx="11" ry="8" fill="url(#s-empty-silver)" stroke="#8FA3B5" stroke-width="1.2"/>
+  <!-- body -->
+  <path d="M30 186 C26 158 36 134 60 124 C66 92 88 66 120 64 C152 66 174 92 180 124 C204 134 214 158 210 186 C209 199 199 206 186 206 L54 206 C41 206 31 199 30 186 Z" fill="url(#s-empty-body)"/>
+  <path d="M70 76 C88 62 112 58 134 61" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity="0.55"/>
+  <!-- windshield face -->
+  <path d="M62 114 C63 84 86 70 120 70 C154 70 177 84 178 114 C178 136 165 146 148 146 L92 146 C75 146 62 136 62 114 Z" fill="url(#s-empty-face)" stroke="#9FC2DB" stroke-width="2"/>
+  <ellipse cx="80" cy="128" rx="10" ry="5.5" fill="#F4A7B9" opacity="0.55"/>
+  <ellipse cx="160" cy="128" rx="10" ry="5.5" fill="#F4A7B9" opacity="0.55"/>
+  <path d="M86 84 Q98 78 110 82 M130 82 Q142 78 154 84" fill="none" stroke="#1C2430" stroke-width="2.8" stroke-linecap="round"/>
+  <path d="M88 108 Q98 116 108 108 M132 108 Q142 116 152 108" fill="none" stroke="#1C2430" stroke-width="4" stroke-linecap="round"/>
+      <path d="M86 107 l-4 -3 M154 107 l4 -3" stroke="#1C2430" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M115 130 Q120 135 125 130" fill="none" stroke="#1C2430" stroke-width="3" stroke-linecap="round"/>
+  <!-- headphones: silver band over the roof, emerald cups; right cup carries the calendar mark -->
+  <path d="M58 112 C58 70 86 50 120 50 C154 50 182 70 182 112" fill="none" stroke="url(#s-empty-silver)" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="57" cy="114" r="14" fill="#16836B" stroke="url(#s-empty-silver)" stroke-width="4"/>
+  <circle cx="183" cy="114" r="14" fill="#16836B" stroke="url(#s-empty-silver)" stroke-width="4"/>
+  <circle cx="57" cy="114" r="7" fill="none" stroke="#DFFBF0" stroke-width="1.6" opacity="0.8"/>
+  <rect x="176" y="107" width="14" height="13" rx="2.5" fill="none" stroke="#DFFBF0" stroke-width="1.8"/>
+  <path d="M176 111 H190 M179.5 105 V108.5 M186.5 105 V108.5 M179.8 115.5 L182.3 118 L186.6 113.6" fill="none" stroke="#DFFBF0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- bow with heart gem -->
+  <path d="M120 153 C100 136 74 140 78 158 C82 172 104 166 120 157 Z" fill="#16836B"/>
+  <path d="M120 153 C140 136 166 140 162 158 C158 172 136 166 120 157 Z" fill="#16836B"/>
+  <path d="M116 156 L104 176 L112 175 L118 168 Z M124 156 L136 176 L128 175 L122 168 Z" fill="#0E5E4C"/>
+  <circle cx="120" cy="154" r="7.5" fill="url(#s-empty-silver)"/>
+  <path d="M120 158.55 C113.7 154.05 115.95 149.1 120 152.475 C124.05 149.1 126.3 154.05 120 158.55 Z" fill="#2FB287" />
+  <!-- heart headlights -->
+  <circle cx="62" cy="168" r="17" fill="url(#s-empty-silver)"/>
+  <circle cx="178" cy="168" r="17" fill="url(#s-empty-silver)"/>
+  <circle cx="62" cy="168" r="13" fill="#7FE3C0" opacity="0.7075"/>
+  <circle cx="178" cy="168" r="13" fill="#7FE3C0" opacity="0.7075"/>
+  <circle cx="62" cy="168" r="10" fill="#E9FFF6"/>
+  <circle cx="178" cy="168" r="10" fill="#E9FFF6"/>
+  <path d="M62 174.75 C51.5 167.25 55.25 159 62 164.625 C68.75 159 72.5 167.25 62 174.75 Z" fill="#FFFFFF" /><path d="M178 174.75 C167.5 167.25 171.25 159 178 164.625 C184.75 159 188.5 167.25 178 174.75 Z" fill="#FFFFFF" />
+  <!-- plate + glow strip -->
+  <path d="M40 192 Q120 204 200 192" fill="none" stroke="#7FE3C0" stroke-width="3.5" stroke-linecap="round" opacity="0.55"/>
+  <rect x="96" y="178" width="48" height="20" rx="6" fill="#FFFDF7" stroke="url(#s-empty-silver)" stroke-width="2.5"/>
+  <g transform="translate(103.5 182.6) scale(0.218)">
+  <g fill="none" stroke="#0B211C" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 38 V6 H27 M6 21.5 H21"/>
+    <path d="M40 6 V38 H58"/>
+    <path d="M111 6 L119.5 38 L128.5 14 L137.5 38 L146 6"/>
+  </g>
+  <path d="M93.6 9.5 A16 16 0 1 0 100 22" fill="none" stroke="#0B211C" stroke-width="6.5" stroke-linecap="round"/>
+  <circle cx="98.8" cy="12.4" r="3.6" fill="#16836B"/></g>
+  <!-- clock crown with mint halo -->
+  <ellipse cx="120" cy="56" rx="64" ry="12" fill="none" stroke="#7FE3C0" stroke-width="3.5" opacity="0.85"/>
+  <path d="M96 30 C90 24 92 18 98 20 M144 30 C150 24 148 18 142 20" fill="none" stroke="url(#s-empty-silver)" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="120" cy="38" r="22" fill="#FFFDF7" stroke="url(#s-empty-silver)" stroke-width="5"/>
+  <circle cx="120" cy="38" r="22" fill="none" stroke="#8FA3B5" stroke-width="1"/>
+  <path d="M120 22 V25 M120 51 V54 M104 38 H107 M133 38 H136" stroke="#0E5E4C" stroke-width="2" stroke-linecap="round"/>
+  <path d="M120 38 L111 31 M120 38 L131 34" stroke="#0E5E4C" stroke-width="2.8" stroke-linecap="round"/>
+  <circle cx="120" cy="38" r="2.4" fill="#0E5E4C"/>
+  <path d="M120 17.5 C113 12.5 115.5 7 120 10.75 C124.5 7 127 12.5 120 17.5 Z" fill="#2FB287" stroke="url(#s-empty-silver)" stroke-width="1.6"/>
+  <path d="M120 65.6 C114.4 61.6 116.4 57.2 120 60.2 C123.6 57.2 125.6 61.6 120 65.6 Z" fill="#2FB287" />
+  <circle cx="204" cy="40" r="20" fill="#A5EFCB" stroke="#fff" stroke-width="4"/><path d="M196 48 Q196 31 213 31 Q213 48 198 48 Z" fill="#16836B"/><path d="M198 46 L208 37" stroke="#A5EFCB" stroke-width="2" stroke-linecap="round"/>
+</svg>
