@@ -13,6 +13,8 @@ export default tseslint.config(
       '**/coverage/**',
       '.qa/**',
       'assets/**',
+      '**/generated/**',
+      '.ep02-work/**',
     ],
   },
   js.configs.recommended,

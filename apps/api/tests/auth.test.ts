@@ -1,629 +1,409 @@
+/**
+ * Authentication & session security — the 34 EP01 cases migrated one-to-one to the EP02
+ * persistent store (MariaDB in production, MemoryStore here; the same flows run against the
+ * TEST database in tests-db/). Where EP02 deliberately changed the contract, the test keeps
+ * the EP01 name's intent and asserts the new behaviour; see docs/TEST-MATRIX.md §auth.
+ *
+ *   EP01 access file + reference codes  →  in-app access request + Owner Console
+ *   EP01 env allow-list testers          →  retired (no approval path outside the console)
+ *   EP01 pending = no session            →  pending users get a session with zero access
+ */
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { FileAccessStore } from '../src/auth/access.js';
-import type { IdTokenResult, IdTokenVerifier } from '../src/line/id-token.js';
-import {
-  integration,
-  ORIGIN,
-  OWNER_ID,
-  STRANGER_ID,
-  tempDir,
-  TESTER_ID,
-  testEnv,
-} from './helpers.js';
+import { importOwner, IdentityService } from '../src/domain/identity.js';
+import { MemoryStore } from '../src/store/memory.js';
+import { integration, ORIGIN, OWNER_ID, tempDir, testEnv } from './helpers.js';
+import { createHarness, fakeVerifier, lineId, seedUser, tokenFor, type Harness } from './support/harness.js';
 
-/** Token string → verification result. Real verification is covered in line-clients.test.ts. */
-function fakeVerifier(map: Record<string, IdTokenResult>): IdTokenVerifier {
-  return {
-    async verify(t) {
-      return map[t] ?? { ok: false, reason: 'invalid' };
-    },
-  };
-}
-const ok = (sub: string, name = 'Synthetic User'): IdTokenResult => ({
-  ok: true,
-  identity: { sub, name, exp: 0, iat: 0, amr: [] },
-});
-const TOKENS: Record<string, IdTokenResult> = {
-  'tok.owner.sig': ok(OWNER_ID, 'Owner (synthetic)'),
-  'tok.tester.sig': ok(TESTER_ID, 'Tester (synthetic)'),
-  'tok.stranger.sig': ok(STRANGER_ID, 'Stranger (synthetic)'),
-  'tok.expired.sig': { ok: false, reason: 'expired' },
-  'tok.audience.sig': { ok: false, reason: 'wrong-audience' },
-  'tok.malformed': { ok: false, reason: 'malformed' },
-  'tok.upstream.sig': { ok: false, reason: 'upstream' },
-};
+const FORM = 'application/x-www-form-urlencoded';
+const EVIL = 'https://evil.example';
+const CHANNEL = integration().line.loginChannelId as string;
+const JSON_CT = { origin: ORIGIN, 'content-type': 'application/json' };
 
-function writeAccess(dir: string, users: object[]) {
-  // write via the store API surface used by the CLI
-  const store = new FileAccessStore({ dir });
-  for (const u of users as {
-    lineUserId: string;
-    role: 'owner' | 'tester';
-    status?: 'active' | 'revoked';
-  }[]) {
-    const ref = store.recordPending(u.lineUserId) as string;
-    assert.equal(store.approve(ref, u.role, { allowAdditionalOwner: true }).ok, true);
-    if (u.status === 'revoked') assert.equal(store.revoke(u.lineUserId.slice(-8)).ok, true);
-  }
-}
+const raw = (h: Harness, url: string, headers: Record<string, string>, payload = '{}') =>
+  h.app.inject({ method: 'POST', url, headers, payload });
 
-interface Ctx {
-  app: FastifyInstance;
-  dir: string;
-  clock: { t: number };
-}
-
-async function setup(
-  opts: { users?: object[]; envTesters?: string[]; loginLimit?: number } = {},
-): Promise<Ctx> {
-  const dir = tempDir();
-  writeAccess(dir, opts.users ?? [{ lineUserId: OWNER_ID, role: 'owner' }]);
-  const clock = { t: Date.UTC(2026, 10, 26, 4, 0, 0) };
-  const app = buildApp({
-    env: testEnv(integration({ secretDir: dir, allowedLineUserIds: opts.envTesters ?? [] })),
-    deps: {
-      verifier: fakeVerifier(TOKENS),
-      messaging: null,
-      now: () => clock.t,
-      access: new FileAccessStore({ dir, envTesters: opts.envTesters ?? [], now: () => clock.t }),
-      loginLimit: { limit: opts.loginLimit ?? 50, windowMs: 60_000 },
-    },
-  });
-  await app.ready();
-  return { app, dir, clock };
-}
-
-function cookieOf(res: { headers: Record<string, unknown> }): string | undefined {
-  const raw = res.headers['set-cookie'];
-  const first = Array.isArray(raw) ? raw[0] : raw;
-  return typeof first === 'string' ? first.split(';')[0] : undefined;
-}
-
-async function login(
-  app: FastifyInstance,
-  idToken: string,
-  extra: { cookie?: string; origin?: string | null; body?: object } = {},
-) {
-  return app.inject({
+const attempt = (h: Harness, remoteAddress: string, headers: Record<string, string> = {}) =>
+  h.app.inject({
     method: 'POST',
     url: '/api/auth/line',
-    headers: {
-      'content-type': 'application/json',
-      ...(extra.origin === null ? {} : { origin: extra.origin ?? ORIGIN }),
-      ...(extra.cookie ? { cookie: extra.cookie } : {}),
-    },
-    payload: extra.body ?? { idToken },
+    remoteAddress,
+    headers: { ...JSON_CT, ...headers },
+    payload: { idToken: 'garbage' },
   });
-}
 
-describe('auth configuration', () => {
+describe('auth: configuration', () => {
   it('fails closed (503) when LINE Login is not configured', async () => {
     const app = buildApp({
       env: testEnv(integration({ line: { ...integration().line, loginChannelId: null } })),
+      store: new MemoryStore(),
     });
     await app.ready();
-    assert.equal(
-      (await app.inject({ method: 'GET', url: '/api/auth/config' })).json().authConfigured,
-      false,
-    );
-    assert.equal((await login(app, 'tok.owner.sig')).statusCode, 503);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/auth/config' })).json().authConfigured, false);
+    const r = await app.inject({ method: 'POST', url: '/api/auth/line', headers: JSON_CT, payload: { idToken: 'a.b.c' } });
+    assert.equal(r.statusCode, 503);
     assert.equal((await app.inject({ method: 'GET', url: '/api/auth/session' })).statusCode, 503);
     await app.close();
+    // EP02: without a database the application API fails closed too.
+    const noStore = buildApp({ env: testEnv(integration()), store: null });
+    await noStore.ready();
+    assert.equal((await noStore.inject({ method: 'GET', url: '/api/v1/today' })).json().error.code, 'SERVICE_NOT_CONFIGURED');
+    assert.equal((await noStore.inject({ method: 'POST', url: '/api/auth/line', headers: JSON_CT, payload: { idToken: 'a.b.c' } })).statusCode, 503);
+    await noStore.close();
   });
 
   it('exposes only non-secret config (LIFF ID) when configured', async () => {
-    const { app } = await setup();
-    const body = (await app.inject({ method: 'GET', url: '/api/auth/config' })).json();
-    assert.deepEqual(body, {
-      authConfigured: true,
-      liffId: `${integration().line.loginChannelId}-AbCdEfGh`,
-    });
-    await app.close();
+    const h = await createHarness();
+    assert.deepEqual((await h.client().get('/api/auth/config')).json(), { authConfigured: true, liffId: `${CHANNEL}-AbCdEfGh` });
+    await h.close();
   });
 });
 
-describe('login exchange', () => {
+describe('auth: login outcomes', () => {
   it('approved owner gets an HttpOnly, Secure, SameSite=Lax __Host- session cookie', async () => {
-    const { app } = await setup();
-    const res = await login(app, 'tok.owner.sig');
+    const h = await createHarness();
+    const owner = await seedUser(h.store, 1, { globalRole: 'OWNER' });
+    const res = await h.client().login(owner.token);
     assert.equal(res.statusCode, 200);
-    const body = res.json();
-    assert.equal(body.state, 'approved');
-    assert.equal(body.user.role, 'owner');
-    assert.equal(typeof body.csrfToken, 'string');
-    const setCookie = String(res.headers['set-cookie']);
-    assert.match(setCookie, /^__Host-flow_session=[A-Za-z0-9_-]{43};/);
-    for (const attr of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/'])
-      assert.ok(setCookie.includes(attr), attr);
-    assert.ok(!setCookie.includes('Domain='));
-    assert.ok(
-      !JSON.stringify(body).includes(OWNER_ID),
-      'LINE user ID never returned to the client',
-    );
-    await app.close();
+    const cookie = String(res.headers['set-cookie']);
+    assert.match(cookie, /^__Host-flow_session=[A-Za-z0-9_-]{43};/);
+    for (const attr of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/']) assert.ok(cookie.includes(attr), attr);
+    assert.ok(!/Domain=/i.test(cookie));
+    assert.match(cookie, /Max-Age=7200/, 'cookie lifetime follows the idle limit (test clock)');
+    assert.equal(res.json().state, 'approved');
+    assert.equal(res.json().user.globalRole, 'OWNER');
+    assert.ok(!res.body.includes(owner.line), 'the LINE user id is never returned');
+    await h.close();
   });
 
-  it('approved tester (access file) and env-listed tester are accepted', async () => {
-    const { app } = await setup({
-      users: [
-        { lineUserId: OWNER_ID, role: 'owner' },
-        { lineUserId: TESTER_ID, role: 'tester' },
-      ],
+  it('approved users come from the database; the EP01 env allow-list no longer approves anyone', async () => {
+    const h = await createHarness();
+    const member = await seedUser(h.store, 2);
+    assert.equal((await h.client().login(member.token)).json().state, 'approved');
+    await h.close();
+    // An id EP01 would have approved via FLOW_ALLOWED_LINE_USER_IDS is now just a new user.
+    const app = buildApp({
+      env: testEnv(integration({ allowedLineUserIds: [lineId(3)] })),
+      store: new MemoryStore(),
+      deps: { verifier: fakeVerifier, messaging: null },
     });
-    assert.equal((await login(app, 'tok.tester.sig')).json().user.role, 'tester');
+    await app.ready();
+    const r = await app.inject({ method: 'POST', url: '/api/auth/line', headers: JSON_CT, payload: { idToken: tokenFor(lineId(3)) } });
+    assert.equal(r.json().state, 'new');
     await app.close();
-    const env = await setup({ envTesters: [STRANGER_ID] });
-    assert.equal((await login(env.app, 'tok.stranger.sig')).json().user.role, 'tester');
-    await env.app.close();
   });
 
-  it('unknown user is denied by default and given an enrollment reference — no session', async () => {
-    const { app, dir } = await setup();
-    const res = await login(app, 'tok.stranger.sig');
-    assert.equal(res.statusCode, 403);
-    const body = res.json();
-    assert.equal(body.state, 'not-approved');
-    assert.match(body.enrollmentRef, /^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-    assert.match(
-      String(res.headers['set-cookie']),
-      /^__Host-flow_session=;.*Max-Age=0/,
-      'no session issued',
-    );
-    const pending = JSON.parse(readFileSync(join(dir, 'pending-enrollments.json'), 'utf8'));
-    assert.equal(pending.pending[0].reference, body.enrollmentRef);
-    // same user again → same reference (no unbounded growth)
-    assert.equal((await login(app, 'tok.stranger.sig')).json().enrollmentRef, body.enrollmentRef);
-    await app.close();
+  it('unknown user is denied by default — a session with no access and no reference code', async () => {
+    const h = await createHarness();
+    const c = h.client();
+    const r = await c.login(tokenFor(lineId(50)));
+    assert.equal(r.statusCode, 200);
+    assert.equal(r.json().state, 'new');
+    assert.ok(!/reference/i.test(r.body), 'no enrollment reference is issued in EP02');
+    for (const url of ['/api/v1/today', '/api/v1/workspaces', '/api/v1/appointments', '/api/v1/admin/summary'])
+      assert.equal((await c.get(url)).statusCode, 403, url);
+    await h.close();
   });
 
   it('revoked user is told access was revoked', async () => {
-    const { app } = await setup({
-      users: [
-        { lineUserId: OWNER_ID, role: 'owner' },
-        { lineUserId: TESTER_ID, role: 'tester', status: 'revoked' },
-      ],
-    });
-    const res = await login(app, 'tok.tester.sig');
-    assert.equal(res.statusCode, 403);
-    assert.equal(res.json().state, 'revoked');
-    await app.close();
+    const h = await createHarness();
+    const u = await seedUser(h.store, 9, { status: 'REVOKED' });
+    const c = h.client();
+    assert.equal((await c.login(u.token)).json().state, 'revoked');
+    assert.equal((await c.get('/api/v1/today')).json().error.code, 'ACCOUNT_REVOKED');
+    await h.close();
   });
 
   it('rejects invalid, expired, wrong-audience and malformed tokens; upstream failure is 503', async () => {
-    const { app } = await setup();
-    assert.equal((await login(app, 'garbage.token.x')).json().error.code, 'ID_TOKEN_INVALID');
-    assert.equal((await login(app, 'tok.expired.sig')).json().error.code, 'ID_TOKEN_EXPIRED');
-    assert.equal((await login(app, 'tok.audience.sig')).json().error.code, 'ID_TOKEN_INVALID');
-    assert.equal((await login(app, 'tok.malformed')).statusCode, 401);
-    const up = await login(app, 'tok.upstream.sig');
-    assert.equal(up.statusCode, 503);
-    assert.equal(up.json().error.code, 'LINE_UNAVAILABLE');
-    await app.close();
+    const h = await createHarness();
+    const c = h.client();
+    assert.equal((await c.login('nope')).json().error.code, 'ID_TOKEN_INVALID');
+    assert.equal((await c.login('tok:expired')).json().error.code, 'ID_TOKEN_EXPIRED');
+    assert.equal((await c.login('tok:audience')).json().error.code, 'ID_TOKEN_INVALID');
+    assert.equal((await c.login('tok:malformed')).json().error.code, 'ID_TOKEN_INVALID');
+    assert.equal((await c.login('tok:upstream')).statusCode, 503);
+    assert.equal(c.cookie, null);
+    assert.equal(await h.store.countUsers({}), 0, 'failed logins create nothing');
+    await h.close();
   });
 
   it('rejects client-supplied identity or role fields (no escalation)', async () => {
-    const { app } = await setup({
-      users: [
-        { lineUserId: OWNER_ID, role: 'owner' },
-        { lineUserId: TESTER_ID, role: 'tester' },
-      ],
-    });
-    for (const extra of [
-      { role: 'owner' },
-      { lineUserId: OWNER_ID },
-      { userId: OWNER_ID },
-      { isAdmin: true },
-    ]) {
-      const res = await login(app, '', { body: { idToken: 'tok.tester.sig', ...extra } });
-      assert.equal(res.statusCode, 400, JSON.stringify(extra));
+    const h = await createHarness();
+    for (const extra of [{ lineUserId: lineId(2) }, { role: 'OWNER' }, { globalRole: 'OWNER' }, { status: 'ACTIVE' }]) {
+      const r = await raw(h, '/api/auth/line', JSON_CT, JSON.stringify({ idToken: tokenFor(lineId(1)), ...extra }));
+      assert.equal(r.statusCode, 400, JSON.stringify(extra));
     }
-    assert.equal((await login(app, 'tok.tester.sig')).json().user.role, 'tester');
-    await app.close();
+    assert.equal(await h.store.countUsers({}), 0);
+    await h.close();
   });
 
   it('rejects missing or foreign Origin (CSRF on login)', async () => {
-    const { app } = await setup();
-    assert.equal((await login(app, 'tok.owner.sig', { origin: null })).statusCode, 403);
-    const evil = await login(app, 'tok.owner.sig', { origin: 'https://evil.example' });
-    assert.equal(evil.statusCode, 403);
-    assert.equal(evil.json().error.code, 'ORIGIN_DENIED');
-    await app.close();
+    const h = await createHarness();
+    const body = JSON.stringify({ idToken: tokenFor(lineId(1)) });
+    assert.equal((await raw(h, '/api/auth/line', { 'content-type': 'application/json' }, body)).statusCode, 403);
+    assert.equal((await raw(h, '/api/auth/line', { origin: EVIL, 'content-type': 'application/json' }, body)).statusCode, 403);
+    assert.equal(await h.store.countUsers({}), 0);
+    await h.close();
   });
 
   it('rate-limits login attempts per client', async () => {
-    const { app } = await setup({ loginLimit: 3 });
+    const h = await createHarness({ loginLimit: 3 });
+    const ip = { 'x-flow-client-ip': '198.51.100.9' };
     const codes: number[] = [];
-    for (let i = 0; i < 5; i += 1) codes.push((await login(app, 'garbage.token.x')).statusCode);
-    assert.deepEqual(codes, [401, 401, 401, 429, 429]);
-    await app.close();
+    for (let i = 0; i < 4; i += 1) codes.push((await attempt(h, '127.0.0.1', ip)).statusCode);
+    assert.deepEqual(codes, [401, 401, 401, 429]);
+    h.clock.t += 301_000; // login window is 5 minutes
+    assert.equal((await attempt(h, '127.0.0.1', ip)).statusCode, 401, 'window resets');
+    await h.close();
   });
 });
 
-describe('sessions', () => {
+describe('auth: session lifecycle (persistent)', () => {
   it('session endpoint returns the approved state and a CSRF token', async () => {
-    const { app } = await setup();
-    const cookie = cookieOf(await login(app, 'tok.owner.sig')) as string;
-    const s = await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } });
-    assert.equal(s.statusCode, 200);
-    assert.equal(s.json().state, 'approved');
-    assert.equal(
-      (await app.inject({ method: 'GET', url: '/api/auth/session' })).json().state,
-      'unauthenticated',
-    );
-    await app.close();
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    const s = (await c.get('/api/auth/session')).json();
+    assert.equal(s.state, 'approved');
+    assert.match(s.csrfToken, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(s.csrfToken, c.csrf);
+    await h.close();
   });
 
   it('prevents session fixation: logging in rotates to a new ID and kills the presented one', async () => {
-    const { app } = await setup();
-    const first = cookieOf(await login(app, 'tok.owner.sig')) as string;
-    const second = cookieOf(await login(app, 'tok.owner.sig', { cookie: first })) as string;
-    assert.notEqual(first, second);
-    assert.equal(
-      (await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie: first } }))
-        .statusCode,
-      401,
-    );
-    assert.equal(
-      (await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie: second } }))
-        .statusCode,
-      200,
-    );
-    // An attacker-chosen session value is never adopted
-    const planted = '__Host-flow_session=attacker-chosen-value';
-    const res = await login(app, 'tok.owner.sig', { cookie: planted });
-    assert.ok(!String(res.headers['set-cookie']).includes('attacker-chosen-value'));
-    await app.close();
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    const first = c.cookie;
+    await c.login(u.token);
+    assert.ok(c.cookie && first && c.cookie !== first);
+    const old = h.client();
+    old.cookie = first;
+    const r = await old.get('/api/auth/session');
+    assert.equal(r.statusCode, 401);
+    assert.equal(r.json().state, 'revoked');
+    await h.close();
   });
 
   it('expires after idle time and reports "expired"', async () => {
-    const { app, clock } = await setup();
-    const cookie = cookieOf(await login(app, 'tok.owner.sig')) as string;
-    clock.t += 121 * 60_000;
-    const res = await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } });
-    assert.equal(res.statusCode, 401);
-    assert.equal(res.json().state, 'expired');
-    await app.close();
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    h.clock.t += 121 * 60_000;
+    const r = await c.get('/api/auth/session');
+    assert.equal(r.statusCode, 401);
+    assert.equal(r.json().state, 'expired');
+    await h.close();
   });
 
   it('expires at the absolute limit even when active', async () => {
-    const { app, clock } = await setup();
-    const cookie = cookieOf(await login(app, 'tok.owner.sig')) as string;
-    for (let i = 0; i < 9; i += 1) {
-      clock.t += 60 * 60_000;
-      await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } });
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    for (let i = 0; i < 8; i += 1) {
+      h.clock.t += 59 * 60_000;
+      assert.equal((await c.get('/api/auth/session')).statusCode, 200, `step ${i + 1}`);
     }
-    assert.equal(
-      (await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } })).json()
-        .state,
-      'expired',
-    );
-    await app.close();
+    h.clock.t += 60 * 60_000;
+    assert.equal((await c.get('/api/auth/session')).json().state, 'expired', '8 h absolute limit');
+    await h.close();
   });
 
-  it('revoking access in the access file ends active sessions on the next request', async () => {
-    const { app, dir } = await setup({
-      users: [
-        { lineUserId: OWNER_ID, role: 'owner' },
-        { lineUserId: TESTER_ID, role: 'tester' },
-      ],
-    });
-    const cookie = cookieOf(await login(app, 'tok.tester.sig')) as string;
-    assert.equal(new FileAccessStore({ dir }).revoke(TESTER_ID.slice(-6)).ok, true);
-    const res = await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } });
-    assert.equal(res.json().state, 'revoked');
-    assert.equal(
-      (await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } })).json()
-        .state,
-      'revoked',
-    );
-    await app.close();
+  it('revoking access (Owner Console) ends active sessions on the next request', async () => {
+    const h = await createHarness();
+    const owner = await seedUser(h.store, 1, { globalRole: 'OWNER' });
+    const u = await seedUser(h.store, 2);
+    const oc = h.client();
+    await oc.login(owner.token);
+    const uc = h.client();
+    await uc.login(u.token);
+    assert.equal((await oc.post(`/api/v1/admin/users/${u.id}/status`, { action: 'revoke' })).statusCode, 200);
+    assert.equal((await uc.get('/api/auth/session')).json().state, 'revoked');
+    assert.equal((await uc.get('/api/v1/today')).statusCode, 401);
+    await h.close();
   });
 
   it('logout requires origin + CSRF token, then the session is unusable', async () => {
-    const { app } = await setup();
-    const res = await login(app, 'tok.owner.sig');
-    const cookie = cookieOf(res) as string;
-    const csrf = res.json().csrfToken as string;
-    const noCsrf = await app.inject({
-      method: 'POST',
-      url: '/api/auth/logout',
-      headers: { cookie, origin: ORIGIN },
-    });
-    assert.equal(noCsrf.statusCode, 403);
-    assert.equal(noCsrf.json().error.code, 'CSRF_INVALID');
-    const wrongCsrf = await app.inject({
-      method: 'POST',
-      url: '/api/auth/logout',
-      headers: { cookie, origin: ORIGIN, 'x-flow-csrf': 'x'.repeat(43) },
-    });
-    assert.equal(wrongCsrf.statusCode, 403);
-    const foreign = await app.inject({
-      method: 'POST',
-      url: '/api/auth/logout',
-      headers: { cookie, origin: 'https://evil.example', 'x-flow-csrf': csrf },
-    });
-    assert.equal(foreign.statusCode, 403);
-    const out = await app.inject({
-      method: 'POST',
-      url: '/api/auth/logout',
-      headers: { cookie, origin: ORIGIN, 'x-flow-csrf': csrf },
-    });
-    assert.equal(out.statusCode, 200);
-    assert.match(String(out.headers['set-cookie']), /Max-Age=0/);
-    assert.equal(
-      (await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } }))
-        .statusCode,
-      401,
-    );
-    await app.close();
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    c.origin = EVIL;
+    assert.equal((await c.post('/api/auth/logout')).statusCode, 403);
+    c.origin = ORIGIN;
+    const csrf = c.csrf;
+    c.csrf = null;
+    assert.equal((await c.post('/api/auth/logout')).json().error.code, 'CSRF_INVALID');
+    c.csrf = csrf;
+    assert.equal((await c.post('/api/auth/logout')).statusCode, 200);
+    assert.equal((await c.get('/api/auth/session')).statusCode, 401);
+    await h.close();
   });
 
-  it('owner-only LINE status: testers are forbidden, unauthenticated is 401, missing token is 503', async () => {
-    const { app } = await setup({
-      users: [
-        { lineUserId: OWNER_ID, role: 'owner' },
-        { lineUserId: TESTER_ID, role: 'tester' },
-      ],
-    });
-    assert.equal((await app.inject({ method: 'GET', url: '/api/line/status' })).statusCode, 401);
-    const tester = cookieOf(await login(app, 'tok.tester.sig')) as string;
-    assert.equal(
-      (await app.inject({ method: 'GET', url: '/api/line/status', headers: { cookie: tester } }))
-        .statusCode,
-      403,
-    );
-    const owner = cookieOf(await login(app, 'tok.owner.sig')) as string;
-    const s = await app.inject({
-      method: 'GET',
-      url: '/api/line/status',
-      headers: { cookie: owner },
-    });
-    assert.equal(s.statusCode, 503);
-    assert.equal(s.json().error.code, 'LINE_NOT_CONFIGURED');
-    await app.close();
+  it('owner-only LINE status: non-owners are forbidden, unauthenticated is 401, missing token is 503', async () => {
+    const h = await createHarness();
+    const owner = await seedUser(h.store, 1, { globalRole: 'OWNER' });
+    const admin = await seedUser(h.store, 2, { globalRole: 'ADMIN' });
+    assert.equal((await h.client().get('/api/line/status')).statusCode, 401);
+    const ac = h.client();
+    await ac.login(admin.token);
+    assert.equal((await ac.get('/api/line/status')).statusCode, 403, 'even a global admin');
+    const oc = h.client();
+    await oc.login(owner.token);
+    assert.equal((await oc.get('/api/line/status')).json().error.code, 'LINE_NOT_CONFIGURED');
+    await h.close();
   });
 });
 
-describe('access store (local owner bootstrap)', () => {
-  it('denies by default; approve requires a live reference; second owner needs explicit flag', () => {
-    const dir = tempDir();
-    const store = new FileAccessStore({ dir });
-    assert.deepEqual(store.decide(OWNER_ID), { state: 'not-approved' });
-    assert.equal(store.approve('ZZZZ-ZZZZ', 'owner').ok, false);
-    const ref = store.recordPending(OWNER_ID) as string;
+describe('auth: approvals and owner import (replaces the EP01 access file)', () => {
+  it('denies by default; approve requires a live request; second owner needs explicit flag', async () => {
+    const s = new MemoryStore();
+    const now = new Date(Date.UTC(2026, 10, 26));
+    const u = await seedUser(s, 5, { status: 'NEW' });
+    const first = await importOwner(s, { lineUserId: OWNER_ID, displayName: 'เจ้าของ', loginChannelId: CHANNEL, allowAdditionalOwner: false }, now);
+    assert.equal(first.outcome, 'created');
+    const owner = (await s.getUser(first.userId))!;
+    const ids = new IdentityService(s, () => now, null);
+    const actor = { user: owner, memberships: [] } as never;
+    await assert.rejects(ids.approveRequest(actor, '00000000-0000-4000-8000-000000000000', []), (e: { status?: number }) => e.status === 404);
     assert.equal(
-      store.approve(ref.toLowerCase().replace('-', ''), 'owner').ok,
-      true,
-      'references are case/format tolerant',
+      (await importOwner(s, { lineUserId: OWNER_ID, displayName: null, loginChannelId: CHANNEL, allowAdditionalOwner: false }, now)).outcome,
+      'unchanged',
+      'idempotent',
     );
-    assert.deepEqual(store.decide(OWNER_ID), { state: 'approved', role: 'owner' });
-    const ref2 = store.recordPending(STRANGER_ID) as string;
-    const second = store.approve(ref2, 'owner');
-    assert.equal(second.ok, false);
-    assert.equal(store.approve(ref2, 'tester').ok, true);
-    assert.ok(existsSync(join(dir, 'access.json')));
+    await assert.rejects(
+      importOwner(s, { lineUserId: u.line, displayName: null, loginChannelId: CHANNEL, allowAdditionalOwner: false }, now),
+      (e: { code?: string }) => e.code === 'OWNER_EXISTS',
+    );
+    assert.equal(
+      (await importOwner(s, { lineUserId: u.line, displayName: null, loginChannelId: CHANNEL, allowAdditionalOwner: true }, now)).outcome,
+      'promoted',
+    );
   });
 
-  it('pending references expire after 15 minutes', () => {
-    const dir = tempDir();
-    let t = 0;
-    const store = new FileAccessStore({ dir, now: () => t });
-    const ref = store.recordPending(OWNER_ID) as string;
-    t += 16 * 60_000;
-    assert.equal(store.approve(ref, 'owner').ok, false);
+  it('access requests are bound to the signed-in account (nothing to leak or expire like EP01 references)', async () => {
+    const h = await createHarness();
+    assert.equal((await h.client().post('/api/v1/access-requests', {})).statusCode, 401);
+    const c = h.client();
+    await c.login(tokenFor(lineId(60)));
+    const r = await c.post('/api/v1/access-requests', { message: 'สวัสดีค่ะ' });
+    assert.equal(r.statusCode, 201);
+    assert.ok(!/U[0-9a-f]{32}/.test(r.body) && !/reference/i.test(r.body));
+    h.clock.t += 24 * 3_600_000; // still pending a day later; nothing expired
+    await c.login(tokenFor(lineId(60)));
+    assert.equal((await c.get('/api/v1/me')).json().access.requestStatus, 'pending');
+    await h.close();
   });
 
-  it('a corrupted access file grants nothing', async () => {
+  it('a corrupted EP01 access file grants nothing (owner import finds no owner)', () => {
     const dir = tempDir();
-    const { writeFileSync } = await import('node:fs');
     writeFileSync(
       join(dir, 'access.json'),
-      '{"version":1,"users":[{"lineUserId":"' +
-        OWNER_ID +
-        '","role":"superuser","status":"active","addedAt":"x"}]}',
+      '{"version":1,"users":[{"lineUserId":"' + OWNER_ID + '","role":"superuser","status":"active","addedAt":"x"}]}',
     );
-    assert.deepEqual(new FileAccessStore({ dir }).decide(OWNER_ID), { state: 'not-approved' });
+    const owners = new FileAccessStore({ dir }).listUsers().filter((u) => u.role === 'owner' && u.status === 'active');
+    assert.equal(owners.length, 0);
   });
 });
 
-/**
- * G09 regression (Windows smoke, 2026-11-26): Windows PowerShell 5.1 `Invoke-WebRequest -Method POST`
- * without -ContentType sends `Content-Type: application/x-www-form-urlencoded` with an empty body.
- * Fastify parsed the content type BEFORE the route handler's Origin check and answered 415.
- * The Origin allow-list now runs in onRequest, before parsing.
- */
-describe('G09 regression: origin check precedes body parsing; logout contract', () => {
-  const FORM = 'application/x-www-form-urlencoded';
-  const EVIL = 'https://evil.example';
-
-  async function post(
-    app: FastifyInstance,
-    url: string,
-    headers: Record<string, string>,
-    payload?: string,
-  ) {
-    return app.inject({
-      method: 'POST',
-      url,
-      headers,
-      ...(payload === undefined ? {} : { payload }),
-    });
-  }
-  async function sessionState(app: FastifyInstance, cookie: string) {
-    return (await app.inject({ method: 'GET', url: '/api/auth/session', headers: { cookie } }))
-      .statusCode;
-  }
-
+describe('auth: Origin before parsing (EP01 G09)', () => {
   it('foreign-origin POSTs are 403 ORIGIN_DENIED whatever the Content-Type (configured)', async () => {
-    const { app } = await setup();
-    for (const url of ['/api/auth/logout', '/api/auth/line']) {
-      for (const [headers, payload] of [
-        [{ origin: EVIL, 'content-type': FORM }, ''],
-        [{ origin: EVIL, 'content-type': 'text/xml' }, '<x/>'],
-        [{ origin: EVIL, 'content-type': 'application/json' }, '{}'],
-        [{ origin: EVIL }, undefined],
-        [{ 'content-type': FORM }, ''], // no Origin header at all
-      ] as [Record<string, string>, string | undefined][]) {
-        const res = await post(app, url, headers, payload);
-        assert.equal(res.statusCode, 403, `${url} ${JSON.stringify(headers)}`);
-        assert.equal(res.json().error.code, 'ORIGIN_DENIED');
+    const h = await createHarness();
+    for (const url of ['/api/auth/logout', '/api/auth/line', '/api/v1/workspaces'])
+      for (const ct of [FORM, 'application/json', 'text/plain', 'multipart/form-data; boundary=x']) {
+        const r = await raw(h, url, { origin: EVIL, 'content-type': ct }, '');
+        assert.equal(r.statusCode, 403, `${url} ${ct}`);
+        assert.equal(r.json().error.code, 'ORIGIN_DENIED');
       }
-    }
-    await app.close();
+    await h.close();
   });
 
   it('foreign-origin POSTs are 403 even when auth is not configured; allowed origin gets 503', async () => {
-    const app = buildApp({
-      env: testEnv(integration({ line: { ...integration().line, loginChannelId: null } })),
-    });
+    const app = buildApp({ env: testEnv(integration({ line: { ...integration().line, loginChannelId: null } })), store: new MemoryStore() });
     await app.ready();
-    const foreign = await post(app, '/api/auth/logout', { origin: EVIL, 'content-type': FORM }, '');
-    assert.equal(foreign.statusCode, 403);
-    assert.equal(foreign.json().error.code, 'ORIGIN_DENIED');
-    const allowed = await post(app, '/api/auth/logout', { origin: ORIGIN });
-    assert.equal(allowed.statusCode, 503);
-    assert.equal(allowed.json().error.code, 'AUTH_NOT_CONFIGURED');
+    const evil = await app.inject({ method: 'POST', url: '/api/auth/line', headers: { origin: EVIL, 'content-type': FORM }, payload: '' });
+    assert.equal(evil.statusCode, 403);
+    const good = await app.inject({ method: 'POST', url: '/api/auth/line', headers: JSON_CT, payload: '{"idToken":"a.b.c"}' });
+    assert.equal(good.statusCode, 503);
     await app.close();
   });
 
   it('unsupported media type from an allowed origin is a separate 415 (no state change)', async () => {
-    const { app } = await setup();
-    const res = await login(app, 'tok.owner.sig');
-    const cookie = cookieOf(res) as string;
-    const csrf = res.json().csrfToken as string;
-    for (const url of ['/api/auth/logout', '/api/auth/line']) {
-      const r = await post(
-        app,
-        url,
-        { origin: ORIGIN, cookie, 'x-flow-csrf': csrf, 'content-type': FORM },
-        '',
-      );
-      assert.equal(r.statusCode, 415, url);
-    }
-    assert.equal(await sessionState(app, cookie), 200, 'session untouched by rejected requests');
-    await app.close();
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    const r = await raw(h, '/api/auth/logout', { origin: ORIGIN, 'content-type': FORM, cookie: c.cookie as string, 'x-flow-csrf': c.csrf as string }, '');
+    assert.equal(r.statusCode, 415);
+    assert.equal((await c.get('/api/auth/session')).statusCode, 200, 'session untouched');
+    await h.close();
   });
 
   it('logout matrix in configured mode: invalid origin, missing/invalid CSRF never end the session', async () => {
-    const { app } = await setup();
-    const res = await login(app, 'tok.owner.sig');
-    const cookie = cookieOf(res) as string;
-    const csrf = res.json().csrfToken as string;
-    const json = { 'content-type': 'application/json' };
-
-    const badOrigin = await post(
-      app,
-      '/api/auth/logout',
-      { ...json, origin: EVIL, cookie, 'x-flow-csrf': csrf },
-      '{}',
-    );
-    assert.equal(badOrigin.statusCode, 403);
-    assert.equal(badOrigin.json().error.code, 'ORIGIN_DENIED');
-    assert.equal(await sessionState(app, cookie), 200);
-
-    const missing = await post(app, '/api/auth/logout', { ...json, origin: ORIGIN, cookie }, '{}');
-    assert.equal(missing.statusCode, 403);
-    assert.equal(missing.json().error.code, 'CSRF_INVALID');
-    assert.equal(await sessionState(app, cookie), 200);
-
-    const invalid = await post(
-      app,
-      '/api/auth/logout',
-      { ...json, origin: ORIGIN, cookie, 'x-flow-csrf': `${csrf.slice(0, -1)}x` },
-      '{}',
-    );
-    assert.equal(invalid.statusCode, 403);
-    assert.equal(invalid.json().error.code, 'CSRF_INVALID');
-    assert.equal(await sessionState(app, cookie), 200);
-
-    const extra = await post(
-      app,
-      '/api/auth/logout',
-      { ...json, origin: ORIGIN, cookie, 'x-flow-csrf': csrf },
-      '{"all":true}',
-    );
-    assert.equal(extra.statusCode, 400, 'logout accepts no data');
-    assert.equal(await sessionState(app, cookie), 200);
-
-    const valid = await post(
-      app,
-      '/api/auth/logout',
-      { ...json, origin: ORIGIN, cookie, 'x-flow-csrf': csrf },
-      '{}',
-    );
-    assert.equal(valid.statusCode, 200);
-    assert.equal(valid.json().state, 'logged-out');
-    assert.match(String(valid.headers['set-cookie']), /Max-Age=0/);
-    assert.equal(await sessionState(app, cookie), 401, 'session ended');
-    await app.close();
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    const csrf = c.csrf as string;
+    const cookie = c.cookie as string;
+    const cases: Record<string, string>[] = [
+      { origin: EVIL, 'x-flow-csrf': csrf },
+      { 'x-flow-csrf': csrf },
+      { origin: ORIGIN },
+      { origin: ORIGIN, 'x-flow-csrf': `${csrf.slice(0, -1)}${csrf.endsWith('A') ? 'B' : 'A'}` },
+      { origin: ORIGIN, 'x-flow-csrf': 'short' },
+    ];
+    for (const extra of cases) {
+      const r = await raw(h, '/api/auth/logout', { 'content-type': 'application/json', cookie, ...extra });
+      assert.equal(r.statusCode, 403, JSON.stringify(Object.keys(extra)));
+    }
+    const body = await raw(h, '/api/auth/logout', { ...JSON_CT, cookie, 'x-flow-csrf': csrf }, '{"all":true}');
+    assert.equal(body.statusCode, 400);
+    assert.equal((await c.get('/api/auth/session')).statusCode, 200, 'still active after every refused logout');
+    await h.close();
   });
 
   it('logout without a session (allowed origin, no body) is idempotent: 200 and cookie cleared', async () => {
-    const { app } = await setup();
-    const res = await post(app, '/api/auth/logout', { origin: ORIGIN });
-    assert.equal(res.statusCode, 200);
-    assert.equal(res.json().state, 'logged-out');
-    assert.match(String(res.headers['set-cookie']), /Max-Age=0/);
-    await app.close();
+    const h = await createHarness();
+    const r = await h.app.inject({ method: 'POST', url: '/api/auth/logout', headers: { origin: ORIGIN } });
+    assert.equal(r.statusCode, 200);
+    assert.equal(r.json().state, 'logged-out');
+    assert.match(String(r.headers['set-cookie']), /Max-Age=0/);
+    await h.close();
   });
 });
 
-describe('F05: rate-limit identity behind the dev gateway (no unrestricted trustProxy)', () => {
-  async function attempt(
-    app: FastifyInstance,
-    remoteAddress: string,
-    headers: Record<string, string> = {},
-  ) {
-    return (
-      await app.inject({
-        method: 'POST',
-        url: '/api/auth/line',
-        remoteAddress,
-        headers: { 'content-type': 'application/json', origin: ORIGIN, ...headers },
-        payload: { idToken: 'garbage.token.x' },
-      })
-    ).statusCode;
-  }
-
+describe('auth: rate limiting per trusted client identity (EP01 F05, persisted)', () => {
   it('distinct trusted client identities (from the loopback gateway) get separate buckets', async () => {
-    const { app } = await setup({ loginLimit: 2 });
+    const h = await createHarness({ loginLimit: 2 });
     const a = { 'x-flow-client-ip': '198.51.100.1' };
-    const b = { 'x-flow-client-ip': '2001:db8::2' };
-    assert.deepEqual(
-      [
-        await attempt(app, '127.0.0.1', a),
-        await attempt(app, '127.0.0.1', a),
-        await attempt(app, '127.0.0.1', a),
-      ],
-      [401, 401, 429],
-    );
-    assert.equal(await attempt(app, '127.0.0.1', b), 401, 'client B is not blocked by client A');
-    await app.close();
+    for (let i = 0; i < 2; i += 1) await attempt(h, '127.0.0.1', a);
+    assert.equal((await attempt(h, '127.0.0.1', a)).statusCode, 429);
+    assert.equal((await attempt(h, '127.0.0.1', { 'x-flow-client-ip': '2001:db8::2' })).statusCode, 401);
+    await h.close();
   });
 
   it('429 carries a Retry-After header and the RATE_LIMITED code', async () => {
-    const { app } = await setup({ loginLimit: 1 });
-    await attempt(app, '127.0.0.1');
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/auth/line',
-      headers: { 'content-type': 'application/json', origin: ORIGIN },
-      payload: { idToken: 'garbage.token.x' },
-    });
-    assert.equal(res.statusCode, 429);
-    assert.equal(res.json().error.code, 'RATE_LIMITED');
-    const wait = Number(res.headers['retry-after']);
-    assert.ok(Number.isInteger(wait) && wait >= 1 && wait <= 300, `retry-after=${String(wait)}`);
-    await app.close();
+    const h = await createHarness({ loginLimit: 1 });
+    await attempt(h, '127.0.0.1');
+    const r = await attempt(h, '127.0.0.1');
+    assert.equal(r.statusCode, 429);
+    assert.equal(r.json().error.code, 'RATE_LIMITED');
+    const wait = Number(r.headers['retry-after']);
+    assert.ok(Number.isInteger(wait) && wait >= 1 && wait <= 300, String(wait));
+    await h.close();
   });
 
   it('forged headers cannot escape the bucket: X-Forwarded-For, Forwarded, junk x-flow-client-ip', async () => {
-    const { app } = await setup({ loginLimit: 2 });
+    const h = await createHarness({ loginLimit: 2 });
     const forged: Record<string, string>[] = [
       { 'x-forwarded-for': '10.0.0.1' },
       { forwarded: 'for=10.0.0.2' },
@@ -631,157 +411,91 @@ describe('F05: rate-limit identity behind the dev gateway (no unrestricted trust
       { 'x-flow-client-ip': '10.0.0.3, 10.0.0.4' },
     ];
     const codes: number[] = [];
-    for (const h of forged) codes.push(await attempt(app, '127.0.0.1', h));
-    assert.deepEqual(codes, [401, 401, 429, 429], 'all share the peer bucket');
-    await app.close();
+    for (const f of forged) codes.push((await attempt(h, '127.0.0.1', f)).statusCode);
+    assert.deepEqual(codes, [401, 401, 429, 429]);
+    await h.close();
   });
 
   it('x-flow-client-ip from a non-loopback peer is ignored (cannot be spoofed remotely)', async () => {
-    const { app } = await setup({ loginLimit: 2 });
+    const h = await createHarness({ loginLimit: 2 });
     const codes: number[] = [];
-    for (let i = 1; i <= 3; i += 1)
-      codes.push(await attempt(app, '203.0.113.50', { 'x-flow-client-ip': `198.51.100.${i}` }));
+    for (let i = 1; i <= 3; i += 1) codes.push((await attempt(h, '203.0.113.50', { 'x-flow-client-ip': `198.51.100.${i}` })).statusCode);
     assert.deepEqual(codes, [401, 401, 429]);
-    await app.close();
+    await h.close();
   });
 });
 
-describe('F07 + section 6: session lifecycle around logout and enrollment', () => {
+describe('auth: logout, re-login and restoration', () => {
   it('logout revokes the server session; the old cookie cannot be reused anywhere', async () => {
-    const { app } = await setup();
-    const res = await login(app, 'tok.owner.sig');
-    const oldCookie = cookieOf(res) as string;
-    const csrf = res.json().csrfToken as string;
-    const out = await app.inject({
-      method: 'POST',
-      url: '/api/auth/logout',
-      headers: { cookie: oldCookie, origin: ORIGIN, 'x-flow-csrf': csrf },
-    });
-    assert.equal(out.statusCode, 200);
-    const session = await app.inject({
-      method: 'GET',
-      url: '/api/auth/session',
-      headers: { cookie: oldCookie },
-    });
-    assert.equal(session.statusCode, 401);
-    assert.notEqual(session.json().state, 'approved');
-    assert.equal(session.json().csrfToken, undefined);
-    const status = await app.inject({
-      method: 'GET',
-      url: '/api/line/status',
-      headers: { cookie: oldCookie },
-    });
-    assert.equal(status.statusCode, 401);
-    // Replaying the old cookie + old CSRF token does not resurrect anything.
-    await app.inject({
-      method: 'POST',
-      url: '/api/auth/logout',
-      headers: { cookie: oldCookie, origin: ORIGIN, 'x-flow-csrf': csrf },
-    });
-    assert.equal(
-      (
-        await app.inject({
-          method: 'GET',
-          url: '/api/auth/session',
-          headers: { cookie: oldCookie },
-        })
-      ).statusCode,
-      401,
-    );
-    await app.close();
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    const old = { cookie: c.cookie, csrf: c.csrf };
+    assert.equal((await c.post('/api/auth/logout')).statusCode, 200);
+    const replay = h.client();
+    replay.cookie = old.cookie;
+    replay.csrf = old.csrf;
+    for (const url of ['/api/auth/session', '/api/v1/me', '/api/v1/today']) assert.equal((await replay.get(url)).statusCode, 401, url);
+    assert.equal((await replay.post('/api/v1/workspaces', { name: 'x', kind: 'CUSTOM' })).statusCode, 401);
+    await h.restart();
+    assert.equal((await replay.get('/api/auth/session')).statusCode, 401, 'still dead after a restart');
+    await h.close();
   });
 
   it('a subsequent LINE login creates a NEW valid session; membership survives logout (no re-enrollment)', async () => {
-    const { app, dir } = await setup();
-    const first = await login(app, 'tok.owner.sig');
-    const oldCookie = cookieOf(first) as string;
-    await app.inject({
-      method: 'POST',
-      url: '/api/auth/logout',
-      headers: {
-        cookie: oldCookie,
-        origin: ORIGIN,
-        'x-flow-csrf': first.json().csrfToken as string,
-      },
-    });
-    const second = await login(app, 'tok.owner.sig');
-    assert.equal(second.statusCode, 200);
-    assert.equal(second.json().state, 'approved');
-    assert.equal(second.json().user.role, 'owner');
-    const newCookie = cookieOf(second) as string;
-    assert.notEqual(newCookie, oldCookie, 'a fresh session ID is issued');
-    assert.notEqual(second.json().csrfToken, first.json().csrfToken, 'and a fresh CSRF token');
-    assert.equal(
-      (
-        await app.inject({
-          method: 'GET',
-          url: '/api/auth/session',
-          headers: { cookie: newCookie },
-        })
-      ).statusCode,
-      200,
-    );
-    assert.equal(
-      (
-        await app.inject({
-          method: 'GET',
-          url: '/api/auth/session',
-          headers: { cookie: oldCookie },
-        })
-      ).statusCode,
-      401,
-    );
-    const store = new FileAccessStore({ dir });
-    assert.equal(store.decide(OWNER_ID).state, 'approved', 'logout did not touch the access list');
-    assert.equal(store.listPending().length, 0, 'no new enrollment was created');
-    await app.close();
-  });
-
-  it('session restoration: reopening with the cookie returns the same approved session (no new login)', async () => {
-    const { app, clock } = await setup();
-    const res = await login(app, 'tok.owner.sig');
-    const cookie = cookieOf(res) as string;
-    clock.t += 30 * 60_000; // reopened 30 minutes later (inside the 2 h idle limit)
-    const again = await app.inject({
-      method: 'GET',
-      url: '/api/auth/session',
-      headers: { cookie },
-    });
-    assert.equal(again.statusCode, 200);
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    await c.login(u.token);
+    const before = c.cookie;
+    await c.post('/api/auth/logout');
+    const again = await c.login(u.token);
     assert.equal(again.json().state, 'approved');
-    assert.equal(again.json().csrfToken, res.json().csrfToken, 'same session, same CSRF token');
-    assert.equal(again.headers['set-cookie'], undefined, 'no new session cookie');
-    await app.close();
+    assert.notEqual(c.cookie, before);
+    assert.equal((await c.get('/api/v1/me')).json().workspaces.length, 1);
+    await h.close();
   });
 
-  it('pending users get no session, cannot reach protected endpoints and see no private data', async () => {
-    const { app } = await setup();
-    const res = await login(app, 'tok.stranger.sig');
-    assert.equal(res.statusCode, 403);
-    assert.equal(res.json().state, 'not-approved');
-    assert.match(String(res.json().enrollmentRef), /^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
-    const raw = res.body;
-    for (const secret of [STRANGER_ID, OWNER_ID, 'Stranger (synthetic)', 'Owner (synthetic)'])
-      assert.ok(!raw.includes(secret), 'no user IDs or display names in the pending response');
-    for (const c of [res.headers['set-cookie'] ?? []].flat())
-      assert.match(String(c), /Max-Age=0/, 'only a cookie-clearing header, never a session');
-    assert.equal((await app.inject({ method: 'GET', url: '/api/line/status' })).statusCode, 401);
-    assert.equal((await app.inject({ method: 'GET', url: '/api/auth/session' })).statusCode, 401);
-    await app.close();
+  it('session restoration: reopening with the cookie returns the same session — also after an API restart', async () => {
+    const h = await createHarness();
+    const u = await seedUser(h.store, 1);
+    const c = h.client();
+    const csrf = (await c.login(u.token)).json().csrfToken;
+    h.clock.t += 30 * 60_000;
+    const again = await c.get('/api/auth/session');
+    assert.equal(again.json().csrfToken, csrf);
+    assert.equal(again.headers['set-cookie'], undefined, 'no new cookie');
+    await h.restart();
+    assert.equal((await c.get('/api/auth/session')).json().csrfToken, csrf, 'persisted across restart');
+    await h.close();
   });
 
-  it('the same pending user gets the same reference (no reference spam); unknown/expired references are rejected', async () => {
-    const { app, dir, clock } = await setup();
-    const a = (await login(app, 'tok.stranger.sig')).json().enrollmentRef as string;
-    const b = (await login(app, 'tok.stranger.sig')).json().enrollmentRef as string;
-    assert.equal(a, b);
-    const store = () => new FileAccessStore({ dir, now: () => clock.t });
-    assert.deepEqual(store().approve('ZZZZ-ZZZZ', 'tester'), {
-      ok: false,
-      reason: 'unknown-reference',
-    });
-    clock.t += 16 * 60_000;
-    assert.equal(store().approve(a, 'tester').ok, false, 'expired reference cannot be approved');
-    await app.close();
+  it('pending users have a session but cannot reach protected endpoints and see no private data', async () => {
+    const h = await createHarness();
+    const owner = await seedUser(h.store, 1, { globalRole: 'OWNER' });
+    const p = await seedUser(h.store, 2, { status: 'PENDING' });
+    const c = h.client();
+    assert.equal((await c.login(p.token)).json().state, 'pending');
+    for (const url of ['/api/v1/today', '/api/v1/calendar?from=2026-12-01&to=2026-12-31', '/api/v1/admin/users', '/api/line/status'])
+      assert.equal((await c.get(url)).statusCode, 403, url);
+    const me = (await c.get('/api/v1/me')).json();
+    assert.deepEqual(me.workspaces, []);
+    assert.ok(!JSON.stringify(me).includes(owner.id));
+    await h.close();
+  });
+
+  it('the same pending user cannot open duplicate requests (no request spam); the owner sees one', async () => {
+    const h = await createHarness();
+    const owner = await seedUser(h.store, 1, { globalRole: 'OWNER' });
+    const c = h.client();
+    await c.login(tokenFor(lineId(70)));
+    assert.equal((await c.post('/api/v1/access-requests', {})).statusCode, 201);
+    const [a, b] = await Promise.all([c.post('/api/v1/access-requests', {}), c.post('/api/v1/access-requests', {})]);
+    assert.deepEqual([a.statusCode, b.statusCode], [409, 409]);
+    const oc = h.client();
+    await oc.login(owner.token);
+    assert.equal((await oc.get('/api/v1/admin/access-requests')).json().items.length, 1);
+    await h.close();
   });
 });

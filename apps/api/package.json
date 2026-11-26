@@ -6,13 +6,21 @@
   "main": "./dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "generate": "prisma generate",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test \"tests/**/*.test.ts\""
+    "test": "tsx --test \"tests/**/*.test.ts\"",
+    "test:db": "tsx --test --test-concurrency=1 \"tests-db/**/*.test.ts\""
   },
   "dependencies": {
+    "@flow/shared": "*",
+    "@prisma/adapter-mariadb": "7.9.1",
+    "@prisma/client": "7.9.1",
     "fastify": "^5.6.0",
     "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "prisma": "7.9.1"
   }
 }

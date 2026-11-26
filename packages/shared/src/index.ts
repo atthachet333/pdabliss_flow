@@ -5,3 +5,6 @@ export * from './quota.js';
 export * from './destinations.js';
 export * from './appointment-draft.js';
 export * from './flex-preview.js';
+export * from './reminder-rules.js';
+export * from './flex-message.js';
+export * from './api-v1.js';

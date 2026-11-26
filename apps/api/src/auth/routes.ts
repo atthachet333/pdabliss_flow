@@ -1,24 +1,24 @@
 /**
- * EP01 authentication routes.
+ * Authentication routes (EP01 contract, EP02 persistence).
  *
- *   GET  /api/auth/config   public, non-secret: whether auth is configured + LIFF ID
- *   POST /api/auth/line     LIFF ID token → verified identity → access decision → session
- *   GET  /api/auth/session  current session state (+ CSRF token for this session)
- *   POST /api/auth/logout   revoke session (CSRF + origin protected; body: none or `{}`)
+ *   GET  /api/auth/config   public: whether auth is configured + LIFF ID
+ *   POST /api/auth/line     LIFF ID token → LINE verification → user row → new session
+ *   GET  /api/auth/session  current session + fresh account state (+ CSRF token)
+ *   POST /api/auth/logout   end session (Origin + CSRF; body none or `{}`)
  *   GET  /api/line/status   owner only: read-only bot info, quota, consumption
  *
- * Fail closed: without LINE Login + LIFF + SESSION_SECRET every auth route answers 503.
- *
- * Ordering (G09 fix): the Origin allow-list for state-changing routes runs in `onRequest`,
- * i.e. BEFORE Fastify's content-type parsing. A cross-origin POST is therefore always
- * answered 403 ORIGIN_DENIED, whatever its Content-Type or body; it can never reach body
- * parsing, configuration checks, rate limiting, token verification or session handling.
- * Requests from an allowed origin with an unsupported media type still get Fastify's 415.
+ * EP02 changes: every verified LINE user gets a session (so a NEW/PENDING user can file an
+ * access request in-app); the session grants nothing by itself — /api/v1 checks the account
+ * state and memberships on every request. Sessions and rate limits persist in MariaDB.
+ * Ordering kept from EP01: Origin is enforced in onRequest, before body parsing.
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { IntegrationConfig } from '../env.js';
 import { isAuthConfigured } from '../env.js';
+import { IdentityService } from '../domain/identity.js';
+import { type Actor, isOwner } from '../domain/policy.js';
+import { loadActor } from '../http/context.js';
 import {
   clearSessionCookie,
   clientAddress,
@@ -29,181 +29,163 @@ import {
 } from '../http/security.js';
 import type { IdTokenVerifier } from '../line/id-token.js';
 import { LineApiError, type LineMessagingReader } from '../line/messaging.js';
-import type { WebhookRecorder } from '../line/webhook.js';
-import { type AccessStore, maskUserId } from './access.js';
-import type { RateLimiter } from './rate-limit.js';
-import { safeEqual, type SessionManager, type SessionRecord } from './sessions.js';
+import type { Store, UserRow } from '../store/types.js';
+import type { PersistentRateLimiter, PersistentSessions } from './persistent.js';
+import { safeEqual } from './persistent.js';
 
 export interface AuthDeps {
   config: IntegrationConfig | undefined;
   allowedOrigins: ReadonlySet<string>;
   verifier: IdTokenVerifier | null;
-  sessions: SessionManager | null;
-  access: AccessStore;
+  sessions: PersistentSessions | null;
+  store: Store;
+  identity: IdentityService | null;
   cookie: CookieSettings;
-  loginLimiter: RateLimiter;
-  sessionLimiter: RateLimiter;
+  loginLimiter: PersistentRateLimiter | null;
+  sessionLimiter: PersistentRateLimiter | null;
   messaging: LineMessagingReader | null;
-  webhook: WebhookRecorder;
+  webhookSummary: () => Promise<Record<string, unknown>>;
 }
 
-type ErrFn = (
-  code: string,
-  message: string,
-) => { error: { code: string; message: string; requestId: string } };
+type ErrFn = (code: string, message: string) => { error: { code: string; message: string; requestId: string } };
 
 const loginBody = z.object({ idToken: z.string().min(1).max(4096) }).strict();
 /** Logout carries no data: no body at all, or an empty JSON object. */
 const logoutBody = z.union([z.undefined(), z.object({}).strict()]);
 
-function sessionView(sessions: SessionManager, record: SessionRecord) {
+export type AccountState = 'approved' | 'new' | 'pending' | 'rejected' | 'suspended' | 'revoked';
+
+export function accountState(u: UserRow): AccountState {
+  switch (u.status) {
+    case 'ACTIVE':
+      return 'approved';
+    case 'NEW':
+      return 'new';
+    case 'PENDING':
+      return 'pending';
+    case 'REJECTED':
+      return 'rejected';
+    case 'SUSPENDED':
+      return 'suspended';
+    default:
+      return 'revoked';
+  }
+}
+
+function sessionView(actor: Actor, csrfToken: string, expiresAt: Date) {
   return {
-    state: 'approved' as const,
-    user: { displayName: record.displayName, role: record.role },
-    session: { expiresAt: new Date(sessions.expiresAt(record)).toISOString() },
-    csrfToken: record.csrfToken,
+    state: accountState(actor.user),
+    user: {
+      id: actor.user.id,
+      displayName: actor.user.displayName,
+      status: actor.user.status,
+      globalRole: actor.user.globalRole,
+    },
+    session: { expiresAt: expiresAt.toISOString() },
+    csrfToken,
   };
 }
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
-  const ready = isAuthConfigured(deps.config) && deps.verifier !== null && deps.sessions !== null;
+  const ready =
+    isAuthConfigured(deps.config) && deps.verifier !== null && deps.sessions !== null && deps.identity !== null;
 
   const notConfigured = (reply: FastifyReply, err: ErrFn) =>
     reply.code(503).send(err('AUTH_NOT_CONFIGURED', 'Authentication is not configured'));
+
+  /** onRequest guard: runs before content-type parsing (EP01 G09 ordering). */
+  const requireAllowedOrigin = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (originAllowed(request, deps.allowedOrigins)) return;
+    request.log.info({ outcome: 'origin-denied' }, 'auth.origin');
+    return reply.code(403).send({
+      error: { code: 'ORIGIN_DENIED', message: 'Request origin is not allowed', requestId: request.id },
+    });
+  };
+
+  const limited = async (
+    limiter: PersistentRateLimiter | null,
+    key: string,
+    reply: FastifyReply,
+    err: ErrFn,
+  ): Promise<boolean> => {
+    if (!limiter) return false;
+    const wait = await limiter.check(key);
+    if (wait <= 0) return false;
+    await reply.header('retry-after', String(wait)).code(429).send(err('RATE_LIMITED', 'Too many requests'));
+    return true;
+  };
 
   app.get('/api/auth/config', async () => ({
     authConfigured: ready,
     liffId: ready ? (deps.config?.line.liffId ?? null) : null,
   }));
 
-  /** onRequest guard: runs before content-type parsing (see header comment). */
-  const requireAllowedOrigin = async (request: FastifyRequest, reply: FastifyReply) => {
-    if (originAllowed(request, deps.allowedOrigins)) return;
-    request.log.info({ outcome: 'origin-denied' }, 'auth.origin');
-    return reply.code(403).send({
-      error: {
-        code: 'ORIGIN_DENIED',
-        message: 'Request origin is not allowed',
-        requestId: request.id,
-      },
-    });
-  };
-
   app.post('/api/auth/line', { onRequest: requireAllowedOrigin }, async (request, reply) => {
     const err: ErrFn = (code, message) => ({ error: { code, message, requestId: request.id } });
-    if (!ready || !deps.verifier || !deps.sessions) return notConfigured(reply, err);
-    // Defence in depth: the onRequest guard has already enforced this.
-    if (!originAllowed(request, deps.allowedOrigins)) {
-      return reply.code(403).send(err('ORIGIN_DENIED', 'Request origin is not allowed'));
-    }
-    const wait = deps.loginLimiter.check(`login:${clientAddress(request)}`);
-    if (wait > 0) {
-      return reply
-        .header('retry-after', String(wait))
-        .code(429)
-        .send(err('RATE_LIMITED', 'Too many attempts'));
-    }
+    if (!ready || !deps.verifier || !deps.sessions || !deps.identity || !deps.config)
+      return notConfigured(reply, err);
+    if (await limited(deps.loginLimiter, `login:${clientAddress(request)}`, reply, err)) return reply;
     const parsed = loginBody.safeParse(request.body);
-    if (!parsed.success)
-      return reply.code(400).send(err('VALIDATION_ERROR', 'Request validation failed'));
+    if (!parsed.success) return reply.code(400).send(err('VALIDATION_ERROR', 'Request validation failed'));
 
     // Session fixation defence: any session presented with a login attempt is ended.
-    const previous = readSessionCookie(request, deps.cookie);
-    if (previous) deps.sessions.end(previous, 'replaced');
+    await deps.sessions.end(readSessionCookie(request, deps.cookie) ?? null, 'REPLACED');
 
     const result = await deps.verifier.verify(parsed.data.idToken);
     if (!result.ok) {
       request.log.info({ outcome: `id-token-${result.reason}` }, 'auth.login');
       clearSessionCookie(reply, deps.cookie);
-      if (result.reason === 'upstream') {
-        return reply
-          .code(503)
-          .send(err('LINE_UNAVAILABLE', 'LINE verification is temporarily unavailable'));
-      }
-      if (result.reason === 'expired') {
-        return reply.code(401).send(err('ID_TOKEN_EXPIRED', 'Login has expired'));
-      }
+      if (result.reason === 'upstream')
+        return reply.code(503).send(err('LINE_UNAVAILABLE', 'LINE verification is temporarily unavailable'));
+      if (result.reason === 'expired') return reply.code(401).send(err('ID_TOKEN_EXPIRED', 'Login has expired'));
       return reply.code(401).send(err('ID_TOKEN_INVALID', 'Login could not be verified'));
     }
-
-    const { sub, name } = result.identity;
-    const decision = deps.access.decide(sub);
-    request.log.info({ outcome: decision.state, user: maskUserId(sub) }, 'auth.login');
-
-    if (decision.state === 'approved') {
-      const { sessionId, record } = deps.sessions.create({
-        lineUserId: sub,
-        role: decision.role,
-        displayName: name,
-      });
-      setSessionCookie(
-        reply,
-        deps.cookie,
-        sessionId,
-        (deps.sessions.expiresAt(record) - Date.now()) / 1000,
-      );
-      return reply.code(200).send(sessionView(deps.sessions, record));
-    }
-    clearSessionCookie(reply, deps.cookie);
-    if (decision.state === 'revoked') return reply.code(403).send({ state: 'revoked' });
-    const enrollmentRef = deps.access.recordPending(sub);
-    return reply.code(403).send({ state: 'not-approved', enrollmentRef });
+    const user = await deps.identity.upsertFromVerifiedLogin(
+      result.identity.sub,
+      result.identity.name,
+      deps.config.line.loginChannelId as string,
+    );
+    const actor = (await loadActor(deps.store, user.id)) as Actor;
+    const { sessionId, session } = await deps.sessions.create(user.id);
+    const expiresAt = deps.sessions.expiresAt(session);
+    setSessionCookie(reply, deps.cookie, sessionId, (expiresAt.getTime() - session.createdAt.getTime()) / 1000);
+    request.log.info({ outcome: accountState(user) }, 'auth.login');
+    return reply.code(200).send(sessionView(actor, deps.sessions.csrfFor(sessionId), expiresAt));
   });
 
   app.get('/api/auth/session', async (request, reply) => {
     const err: ErrFn = (code, message) => ({ error: { code, message, requestId: request.id } });
     if (!ready || !deps.sessions) return notConfigured(reply, err);
-    const wait = deps.sessionLimiter.check(`session:${clientAddress(request)}`);
-    if (wait > 0) {
-      return reply
-        .header('retry-after', String(wait))
-        .code(429)
-        .send(err('RATE_LIMITED', 'Too many requests'));
-    }
-    const resolved = deps.sessions.resolve(readSessionCookie(request, deps.cookie));
+    if (await limited(deps.sessionLimiter, `session:${clientAddress(request)}`, reply, err)) return reply;
+    const cookie = readSessionCookie(request, deps.cookie) ?? null;
+    const resolved = await deps.sessions.resolve(cookie);
     if (resolved.status !== 'active') {
       if (resolved.status !== 'none') clearSessionCookie(reply, deps.cookie);
-      const state =
-        resolved.status === 'expired'
-          ? 'expired'
-          : resolved.status === 'revoked'
-            ? 'revoked'
-            : 'unauthenticated';
+      const state = resolved.status === 'expired' ? 'expired' : resolved.status === 'revoked' ? 'revoked' : 'unauthenticated';
       return reply.code(401).send({ state });
     }
-    const record = resolved.record;
-    const decision = deps.access.decide(record.lineUserId);
-    if (decision.state !== 'approved') {
-      deps.sessions.revokeUser(record.lineUserId);
+    const actor = await loadActor(deps.store, resolved.session.userId);
+    if (!actor) {
       clearSessionCookie(reply, deps.cookie);
-      request.log.info(
-        { outcome: 'access-revoked', user: maskUserId(record.lineUserId) },
-        'auth.session',
-      );
-      return reply.code(401).send({ state: 'revoked' });
+      return reply.code(401).send({ state: 'unauthenticated' });
     }
-    record.role = decision.role;
-    return reply.code(200).send(sessionView(deps.sessions, record));
+    return reply
+      .code(200)
+      .send(sessionView(actor, deps.sessions.csrfFor(resolved.sessionId), deps.sessions.expiresAt(resolved.session)));
   });
 
   app.post('/api/auth/logout', { onRequest: requireAllowedOrigin }, async (request, reply) => {
     const err: ErrFn = (code, message) => ({ error: { code, message, requestId: request.id } });
     if (!ready || !deps.sessions) return notConfigured(reply, err);
-    // Defence in depth: the onRequest guard has already enforced this.
-    if (!originAllowed(request, deps.allowedOrigins)) {
-      return reply.code(403).send(err('ORIGIN_DENIED', 'Request origin is not allowed'));
-    }
-    if (!logoutBody.safeParse(request.body).success) {
+    if (!logoutBody.safeParse(request.body).success)
       return reply.code(400).send(err('VALIDATION_ERROR', 'Request validation failed'));
-    }
-    const cookieValue = readSessionCookie(request, deps.cookie);
-    const resolved = deps.sessions.resolve(cookieValue);
+    const cookie = readSessionCookie(request, deps.cookie) ?? null;
+    const resolved = await deps.sessions.resolve(cookie, { touch: false });
     if (resolved.status === 'active') {
       const header = request.headers['x-flow-csrf'];
-      if (!safeEqual(typeof header === 'string' ? header : undefined, resolved.record.csrfToken)) {
+      if (!safeEqual(typeof header === 'string' ? header : undefined, deps.sessions.csrfFor(resolved.sessionId)))
         return reply.code(403).send(err('CSRF_INVALID', 'Request could not be verified'));
-      }
-      deps.sessions.end(cookieValue, 'logged-out');
+      await deps.sessions.end(cookie, 'LOGGED_OUT');
     }
     clearSessionCookie(reply, deps.cookie);
     return reply.code(200).send({ state: 'logged-out' });
@@ -212,17 +194,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
   app.get('/api/line/status', async (request, reply) => {
     const err: ErrFn = (code, message) => ({ error: { code, message, requestId: request.id } });
     if (!ready || !deps.sessions) return notConfigured(reply, err);
-    const resolved = deps.sessions.resolve(readSessionCookie(request, deps.cookie));
+    const resolved = await deps.sessions.resolve(readSessionCookie(request, deps.cookie) ?? null);
     if (resolved.status !== 'active') return reply.code(401).send({ state: 'unauthenticated' });
-    const decision = deps.access.decide(resolved.record.lineUserId);
-    if (decision.state !== 'approved' || decision.role !== 'owner') {
-      return reply.code(403).send(err('FORBIDDEN', 'Owner access is required'));
-    }
-    if (!deps.messaging) {
-      return reply
-        .code(503)
-        .send(err('LINE_NOT_CONFIGURED', 'Messaging API access token is not configured'));
-    }
+    const actor = await loadActor(deps.store, resolved.session.userId);
+    if (!actor || !isOwner(actor)) return reply.code(403).send(err('FORBIDDEN', 'Owner access is required'));
+    if (!deps.messaging)
+      return reply.code(503).send(err('LINE_NOT_CONFIGURED', 'Messaging API access token is not configured'));
     try {
       const [bot, quota, consumption] = await Promise.all([
         deps.messaging.getBotInfo(),
@@ -233,16 +210,14 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
         bot: { basicId: bot.basicId, displayName: bot.displayName },
         quota: { type: quota.type, value: quota.value ?? null },
         consumption: { totalUsage: consumption.totalUsage },
-        webhook: deps.webhook.summary(),
+        webhook: await deps.webhookSummary(),
         outboundMessaging: 'disabled',
         checkedAt: new Date().toISOString(),
       });
     } catch (e) {
       const kind = e instanceof LineApiError ? e.kind : 'unexpected';
       request.log.warn({ outcome: `line-api-${kind}` }, 'line.status');
-      return reply
-        .code(502)
-        .send(err(`LINE_API_${kind.toUpperCase().replace(/-/g, '_')}`, 'LINE API request failed'));
+      return reply.code(502).send(err(`LINE_API_${kind.toUpperCase().replace(/-/g, '_')}`, 'LINE API request failed'));
     }
   });
 }

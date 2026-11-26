@@ -2,7 +2,7 @@
   "name": "pdabliss-flow",
   "version": "0.0.0",
   "private": true,
-  "description": "PDA BLISS FLOW \u2014 Shared Calendar & LINE Personal Assistant (Sally). EP00 foundation.",
+  "description": "PDA BLISS FLOW \u2014 Shared Calendar & LINE Personal Assistant (Sally).",
   "license": "UNLICENSED",
   "type": "module",
   "engines": {
@@ -20,7 +20,7 @@
     "build:shared": "npm run build -w @flow/shared",
     "build": "npm run build:shared && npm run build -w @flow/api -w @flow/worker -w @flow/web && node scripts/check-showcase-excluded.mjs",
     "build:showcase": "npm run build:shared && npm run build:showcase -w @flow/web",
-    "typecheck": "npm run build:shared && npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run build:shared && node scripts/db.mjs generate && npm run typecheck --workspaces --if-present",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -29,7 +29,10 @@
     "brand:generate": "node scripts/generate-brand-assets.mjs",
     "access": "node scripts/flow-access.mjs",
     "gateway": "node apps/api/dist/gateway.js",
-    "check:secrets:history": "node scripts/check-secrets.mjs --history"
+    "check:secrets:history": "node scripts/check-secrets.mjs --history",
+    "test:db": "npm run build:shared && node scripts/db.mjs generate && npm run test:db -w @flow/api",
+    "db": "node scripts/db.mjs",
+    "admin": "node scripts/flow-access.mjs --cli=flow-admin"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",

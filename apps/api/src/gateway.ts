@@ -33,6 +33,18 @@ export const API_ALLOWLIST: ReadonlyArray<readonly [string, string]> = [
   ['GET', '/api/line/status'],
 ];
 
+/** EP02: the application API. Every route authenticates and authorizes in the API itself. */
+export const API_PREFIXES: ReadonlyArray<readonly [ReadonlySet<string>, RegExp]> = [
+  [new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']), /^\/api\/v1\/[a-z0-9/_-]{1,160}$/],
+];
+
+export function apiAllowed(method: string, path: string): boolean {
+  return (
+    API_ALLOWLIST.some(([m, p]) => m === method && p === path) ||
+    API_PREFIXES.some(([methods, re]) => methods.has(method) && re.test(path) && !path.includes('//'))
+  );
+}
+
 /** Client routes that may receive index.html (LIFF endpoint + rich-menu deep links). */
 export const APP_ROUTES = new Set([
   '/',
@@ -42,7 +54,25 @@ export const APP_ROUTES = new Set([
   '/groups',
   '/history',
   '/settings',
+  '/search',
+  '/privacy',
+  '/terms',
+  '/owner',
 ]);
+
+/** EP02 parameterised client routes (ids are UUIDs, invitation tokens base64url). */
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+export const APP_ROUTE_PATTERNS: readonly RegExp[] = [
+  new RegExp(`^/appointments/${UUID}(/edit)?$`),
+  new RegExp(`^/groups/${UUID}$`),
+  /^\/owner\/(requests|users|invitations|groups|audit)$/,
+  new RegExp(`^/owner/users/${UUID}$`),
+  /^\/settings\/(preferences|privacy)$/,
+  /^\/invite\/[A-Za-z0-9_-]{43}$/,
+];
+
+export const isAppRoute = (route: string): boolean =>
+  APP_ROUTES.has(route) || APP_ROUTE_PATTERNS.some((re) => re.test(route));
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -208,7 +238,7 @@ export function createGateway(opts: GatewayOptions): Server {
       : '';
 
     if (path.startsWith('/api/') || path === '/api') {
-      if (API_ALLOWLIST.some(([m, p]) => m === method && p === path)) {
+      if (apiAllowed(method, path)) {
         proxy(req, res, path + rawQuery, opts);
       } else {
         send(
@@ -241,7 +271,7 @@ export function createGateway(opts: GatewayOptions): Server {
     }
 
     const route = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
-    if (APP_ROUTES.has(route)) {
+    if (isAppRoute(route)) {
       const index = join(root, 'index.html');
       if (existsSync(index)) {
         serveFile(res, index, method, false);

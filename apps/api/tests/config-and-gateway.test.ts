@@ -245,4 +245,23 @@ describe('development gateway', () => {
     assert.equal(seen.length, 4);
     for (const line of seen) assert.match(line, /ip=127\.0\.0\.1 /);
   });
+  it('EP02: /api/v1 is proxied for API methods only; SPA deep links incl. invitations are served', async () => {
+    for (const m of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+      assert.equal((await hit(m, '/api/v1/appointments')).status, 200, m);
+    assert.equal((await hit('OPTIONS', '/api/v1/appointments')).status, 404);
+    assert.equal((await hit('GET', '/api/v1//appointments')).status, 404);
+    assert.equal((await hit('GET', '/api/v2/anything')).status, 404);
+    for (const p of [
+      '/owner',
+      '/owner/requests',
+      '/search',
+      '/privacy',
+      `/invite/${'A'.repeat(43)}`,
+      '/appointments/0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b/edit',
+      '/groups/0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b',
+    ])
+      assert.equal((await hit('GET', p)).status, 200, p);
+    for (const p of ['/invite/short', '/groups/not-a-uuid', '/owner/secret', '/appointments/x/edit'])
+      assert.equal((await hit('GET', p)).status, 404, p);
+  });
 });

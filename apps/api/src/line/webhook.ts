@@ -20,8 +20,8 @@ import { z } from 'zod';
 
 export const WEBHOOK_BODY_LIMIT = 256 * 1024;
 const MAX_EVENTS = 100;
-const DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
-const DEDUPE_MAX = 5000;
+/** Webhook event ids are kept 7 days in MariaDB (LINE redelivers within that window). */
+export const WEBHOOK_DEDUPE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const RECENT_MAX = 100;
 
 export const SUPPORTED_EVENT_TYPES = [
@@ -104,7 +104,6 @@ export interface PendingGroup {
 /** In-memory development recorder (EP03 moves destinations into the database). */
 export class WebhookRecorder {
   private readonly hashKey = randomBytes(32);
-  private readonly seen = new Map<string, number>();
   private readonly recent: RecordedEvent[] = [];
   private readonly groups = new Map<string, PendingGroup>();
   private counts = { received: 0, duplicates: 0, unknown: 0 };
@@ -113,20 +112,6 @@ export class WebhookRecorder {
 
   ref(id: string | undefined): string | null {
     return id ? createHmac('sha256', this.hashKey).update(id).digest('hex').slice(0, 12) : null;
-  }
-
-  /** Returns true when the event ID was already processed (duplicate / redelivery). */
-  isDuplicate(eventId: string | undefined): boolean {
-    if (!eventId) return false;
-    const t = this.now();
-    const prev = this.seen.get(eventId);
-    if (prev !== undefined && t - prev < DEDUPE_TTL_MS) return true;
-    this.seen.set(eventId, t);
-    if (this.seen.size > DEDUPE_MAX) {
-      const oldest = this.seen.keys().next().value;
-      if (oldest !== undefined) this.seen.delete(oldest);
-    }
-    return false;
   }
 
   record(event: WebhookEvent): RecordedEvent {
@@ -189,10 +174,18 @@ export class WebhookRecorder {
   }
 }
 
+/** EP02: persisted deduplication + group lifecycle (no outbound calls, no message content). */
+export interface WebhookPersistence {
+  /** Returns 'duplicate' when this webhookEventId was already processed (survives restarts). */
+  claim(eventId: string, type: string, sourceType: string): Promise<'new' | 'duplicate'>;
+  onGroupEvent(kind: 'join' | 'leave', groupId: string): Promise<void>;
+}
+
 export interface WebhookDeps {
   channelSecret: string | null;
   resolveBotUserId: () => Promise<string | null>;
   recorder: WebhookRecorder;
+  persistence: WebhookPersistence;
 }
 
 export function registerWebhookRoute(app: FastifyInstance, deps: WebhookDeps): void {
@@ -250,12 +243,23 @@ export function registerWebhookRoute(app: FastifyInstance, deps: WebhookDeps): v
       let received = 0;
       let duplicates = 0;
       for (const event of parsed.data.events) {
-        if (deps.recorder.isDuplicate(event.webhookEventId)) {
-          duplicates += 1;
-          deps.recorder.countDuplicate();
-          continue;
+        const eventId = event.webhookEventId;
+        if (typeof eventId === 'string' && eventId.length > 0 && eventId.length <= 40) {
+          const claimed = await deps.persistence.claim(
+            eventId,
+            event.type.slice(0, 40),
+            (event.source?.type ?? 'unknown').slice(0, 16),
+          );
+          if (claimed === 'duplicate') {
+            duplicates += 1;
+            deps.recorder.countDuplicate();
+            continue;
+          }
         }
         const rec = deps.recorder.record(event);
+        const groupId = event.source?.groupId;
+        if ((event.type === 'join' || event.type === 'leave') && typeof groupId === 'string')
+          await deps.persistence.onGroupEvent(event.type, groupId);
         received += 1;
         request.log.info(
           {

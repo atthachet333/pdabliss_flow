@@ -6,3 +6,5 @@ coverage
 package-lock.json
 assets/**/*.svg
 docs/MASTER-SPECIFICATION.md
+apps/api/src/generated
+.ep02-work

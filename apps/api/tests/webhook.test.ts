@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildApp } from '../src/app.js';
 import { lineSignature, WEBHOOK_BODY_LIMIT } from '../src/line/webhook.js';
+import { MemoryStore } from '../src/store/memory.js';
 import {
   BOT_ID,
   CHANNEL_SECRET,
@@ -16,12 +17,14 @@ const GROUP_ID = `C${'e'.repeat(32)}`;
 
 async function makeApp(overrides: Parameters<typeof integration>[0] = {}) {
   const net = mockFetch(() => jsonResponse(200, {}));
+  const store = new MemoryStore();
   const app = buildApp({
     env: testEnv(integration(overrides)),
+    store,
     deps: { fetchImpl: net.fn, verifier: null },
   });
   await app.ready();
-  return { app, net };
+  return { app, net, store };
 }
 
 function event(type: string, extra: Record<string, unknown> = {}) {
@@ -185,7 +188,7 @@ describe('LINE webhook events', () => {
   });
 
   it('a group join stays pending-registration (never authorised) and causes no outbound call', async () => {
-    const { app, net } = await makeApp();
+    const { app, net, store } = await makeApp();
     const join = event('join', {
       source: { type: 'group', groupId: GROUP_ID },
       replyToken: 'reply-token',
@@ -199,6 +202,10 @@ describe('LINE webhook events', () => {
     const res = await post(app, JSON.stringify({ destination: BOT_ID, events: [join, msg] }));
     assert.equal(res.statusCode, 200);
     assert.equal(net.calls.length, 0, 'no LINE API call (no reply, no push) as a side effect');
+    const groups = await store.listDestinations({ kinds: ['GROUP'], limit: 5 });
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0]?.status, 'PENDING');
+    assert.equal(groups[0]?.workspaceId, null, 'registration grants nothing');
     await app.close();
   });
 
@@ -207,6 +214,7 @@ describe('LINE webhook events', () => {
     const app = buildApp({
       env: { ...testEnv(), logLevel: 'info' },
       logStream: { write: (m: string) => void lines.push(m) },
+      store: new MemoryStore(),
       deps: { verifier: null, messaging: null },
     });
     await app.ready();
@@ -240,6 +248,7 @@ describe('LINE webhook events', () => {
           line: { ...integration().line, botUserId: null, channelAccessToken: 'T'.repeat(120) },
         }),
       ),
+      store: new MemoryStore(),
       deps: { fetchImpl: net.fn, verifier: null },
     });
     await app.ready();

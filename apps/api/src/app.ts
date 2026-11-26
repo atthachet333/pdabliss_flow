@@ -4,17 +4,26 @@
  *
  * EP00: env-driven config, structured logging with redaction, request IDs, consistent
  * error envelope, security headers, restricted CORS, GET /health.
- * EP01: LINE ID-token login exchange, in-memory development sessions, private access
- * list, CSRF/origin checks, rate limiting, signed LINE webhook, read-only Messaging API
- * status. No endpoint sends LINE messages.
+ * EP01: LINE ID-token login exchange, CSRF/origin checks, rate limiting, signed LINE
+ * webhook, read-only Messaging API status.
+ * EP02: everything persistent goes through the Store port (MariaDB in dev/test/prod,
+ * MemoryStore in unit tests): sessions, rate limits, users, workspaces, appointments,
+ * webhook dedupe. /api/v1 serves the application. No endpoint sends LINE messages.
+ * Without a store (no database configured) every auth/app route fails closed (503).
  */
 import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
-import { type AccessStore, FileAccessStore } from './auth/access.js';
-import { RateLimiter } from './auth/rate-limit.js';
+import { PersistentRateLimiter, PersistentSessions } from './auth/persistent.js';
 import { registerAuthRoutes } from './auth/routes.js';
-import { MemorySessionStore, SessionManager } from './auth/sessions.js';
+import type { Clock } from './core/context.js';
+import { AppointmentService } from './domain/appointments.js';
+import { DestinationService } from './domain/destinations.js';
+import { IdentityService } from './domain/identity.js';
+import { InvitationService } from './domain/invitations.js';
+import { WorkspaceService } from './domain/workspaces.js';
 import type { AppEnv } from './env.js';
+import { registerV1Routes } from './http/v1.js';
+import type { Store } from './store/types.js';
 import { isAuthConfigured } from './env.js';
 import { cookieSettings } from './http/security.js';
 import {
@@ -23,10 +32,10 @@ import {
   type IdTokenVerifier,
 } from './line/id-token.js';
 import { createLineMessagingReader, type LineMessagingReader } from './line/messaging.js';
-import { registerWebhookRoute, WebhookRecorder } from './line/webhook.js';
+import { registerWebhookRoute, WEBHOOK_DEDUPE_RETENTION_MS, WebhookRecorder } from './line/webhook.js';
 
 export const SERVICE_NAME = 'pdabliss-flow-api';
-export const SERVICE_VERSION = '0.1.0-ep01';
+export const SERVICE_VERSION = '0.2.0-ep02';
 
 /** Log paths redacted everywhere (headers and common secret-bearing fields). */
 export const REDACT_PATHS = [
@@ -53,6 +62,8 @@ export interface ErrorBody {
 
 export interface BuildAppOptions {
   env: AppEnv;
+  /** Persistence. Absent → auth and application routes answer 503 (fail closed). */
+  store?: Store | null;
   /** Optional log destination (tests capture output to verify redaction). */
   logStream?: { write(msg: string): void };
   /** Test seams — production code uses the real LINE-backed implementations. */
@@ -60,9 +71,9 @@ export interface BuildAppOptions {
     fetchImpl?: FetchLike;
     verifier?: IdTokenVerifier | null;
     messaging?: LineMessagingReader | null;
-    access?: AccessStore;
     now?: () => number;
     loginLimit?: { limit: number; windowMs: number };
+    apiLimit?: { limit: number; windowMs: number };
   };
 }
 
@@ -75,7 +86,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'cache-control': 'no-store',
 };
 
-export function buildApp({ env, logStream, deps = {} }: BuildAppOptions): FastifyInstance {
+export function buildApp({ env, logStream, deps = {}, store = null }: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger:
       env.logLevel === 'silent' && !logStream
@@ -118,8 +129,8 @@ export function buildApp({ env, logStream, deps = {} }: BuildAppOptions): Fastif
         .send(errorBody('CORS_ORIGIN_DENIED', 'Origin not allowed', request.id));
     }
     reply
-      .header('access-control-allow-methods', 'GET, POST, OPTIONS')
-      .header('access-control-allow-headers', 'content-type, authorization, x-flow-csrf')
+      .header('access-control-allow-methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
+      .header('access-control-allow-headers', 'content-type, authorization, x-flow-csrf, idempotency-key')
       .header('access-control-max-age', '600');
     return reply.code(204).send();
   });
@@ -171,26 +182,27 @@ export function buildApp({ env, logStream, deps = {} }: BuildAppOptions): Fastif
             ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
           })
         : null;
-  const sessions = isAuthConfigured(integration)
-    ? new SessionManager(
-        new MemorySessionStore(now),
-        integration.sessionSecret,
-        {
-          absoluteMs: integration.sessionAbsoluteMinutes * 60_000,
-          idleMs: integration.sessionIdleMinutes * 60_000,
-        },
-        now,
-      )
-    : null;
-  const access =
-    deps.access ??
-    new FileAccessStore({
-      dir: integration?.secretDir ?? null,
-      envTesters: integration?.allowedLineUserIds ?? [],
-      now,
-    });
-  const recorder = new WebhookRecorder(now);
+  const clock: Clock = () => new Date(now());
+  const secret = isAuthConfigured(integration) ? integration.sessionSecret : null;
+  const sessions =
+    store && secret
+      ? new PersistentSessions(
+          store,
+          secret,
+          {
+            absoluteMs: (integration?.sessionAbsoluteMinutes ?? 480) * 60_000,
+            idleMs: (integration?.sessionIdleMinutes ?? 120) * 60_000,
+          },
+          clock,
+        )
+      : null;
   const loginLimit = deps.loginLimit ?? { limit: 10, windowMs: 5 * 60_000 };
+  const apiLimit = deps.apiLimit ?? { limit: 240, windowMs: 60_000 };
+  const limiter = (l: { limit: number; windowMs: number }) =>
+    store && secret ? new PersistentRateLimiter(store, secret, l.limit, l.windowMs, clock) : null;
+  const identity = store ? new IdentityService(store, clock, sessions) : null;
+  const destinations = store ? new DestinationService(store, clock) : null;
+  const recorder = new WebhookRecorder(now);
 
   let botUserId: string | null = integration?.line.botUserId ?? null;
   const resolveBotUserId = async (): Promise<string | null> => {
@@ -202,24 +214,63 @@ export function buildApp({ env, logStream, deps = {} }: BuildAppOptions): Fastif
     }
     return botUserId;
   };
+  const cookie = cookieSettings(integration?.publicBaseUrl ?? null);
 
   registerAuthRoutes(app, {
     config: integration,
     allowedOrigins,
     verifier,
     sessions,
-    access,
-    cookie: cookieSettings(integration?.publicBaseUrl ?? null),
-    loginLimiter: new RateLimiter(loginLimit.limit, loginLimit.windowMs, now),
-    sessionLimiter: new RateLimiter(120, 60_000, now),
+    store: store as Store,
+    identity,
+    cookie,
+    loginLimiter: limiter(loginLimit),
+    sessionLimiter: limiter({ limit: 120, windowMs: 60_000 }),
     messaging,
-    webhook: recorder,
+    webhookSummary: async () => ({
+      ...recorder.summary(),
+      ...(destinations ? await destinations.counts() : {}),
+    }),
   });
   registerWebhookRoute(app, {
-    channelSecret: integration?.line.messagingChannelSecret ?? null,
+    channelSecret: store ? (integration?.line.messagingChannelSecret ?? null) : null,
     resolveBotUserId,
     recorder,
+    persistence: {
+      claim: async (eventId, type, sourceType) => {
+        const at = clock();
+        return (store as Store).recordWebhookEvent({
+          eventId,
+          type,
+          sourceType,
+          receivedAt: at,
+          expiresAt: new Date(at.getTime() + WEBHOOK_DEDUPE_RETENTION_MS),
+        });
+      },
+      onGroupEvent: async (kind, groupId) => destinations?.onGroupEvent(kind, groupId),
+    },
   });
+  if (store && sessions && identity && destinations) {
+    registerV1Routes(app, {
+      store,
+      sessions,
+      cookie,
+      allowedOrigins,
+      limiter: limiter(apiLimit),
+      identity,
+      workspaces: new WorkspaceService(store, clock),
+      invitations: new InvitationService(store, clock),
+      destinations,
+      appointments: new AppointmentService(store, clock, integration?.publicBaseUrl ?? null),
+      messaging,
+      publicBaseUrl: integration?.publicBaseUrl ?? null,
+      clock,
+    });
+  } else {
+    app.all('/api/v1/*', async (request, reply) =>
+      reply.code(503).send(errorBody('SERVICE_NOT_CONFIGURED', 'The application is not configured', request.id)),
+    );
+  }
 
   app.setNotFoundHandler(async (request, reply) => {
     return reply.code(404).send(errorBody('NOT_FOUND', 'Resource not found', request.id));

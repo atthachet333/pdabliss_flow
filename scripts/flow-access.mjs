@@ -17,10 +17,15 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const cli = join(root, 'apps', 'api', 'dist', 'cli', 'flow-access.js');
+// `--cli=flow-admin` selects the EP02 admin CLI; default is the EP01 access CLI.
+const cliArg = process.argv.find((a) => a.startsWith('--cli='));
+const cliName = cliArg === '--cli=flow-admin' ? 'flow-admin' : 'flow-access';
+const passArgs = process.argv.slice(2).filter((a) => !a.startsWith('--cli='));
+const cli = join(root, 'apps', 'api', 'dist', 'cli', `${cliName}.js`);
 const sources = [
   join(root, 'apps', 'api', 'src'),
   join(root, 'packages', 'shared', 'src'),
+  join(root, 'apps', 'api', 'prisma', 'schema.prisma'),
   join(root, 'apps', 'api', 'tsconfig.json'),
   join(root, 'apps', 'api', 'tsconfig.build.json'),
 ];
@@ -66,5 +71,5 @@ if (!isFresh()) {
   console.error('Access CLI build is out of date - rebuilding shared + API once...');
   if (!build()) process.exit(1);
 }
-const r = spawnSync(process.execPath, [cli, ...process.argv.slice(2)], { stdio: 'inherit' });
+const r = spawnSync(process.execPath, [cli, ...passArgs], { stdio: 'inherit' });
 process.exit(r.status ?? 1);

@@ -1,0 +1,506 @@
+// PDA BLISS FLOW — EP02 data model (MariaDB 10.6+ / InnoDB / utf8mb4).
+//
+// Conventions (docs/EP02-DATABASE.md):
+//  - Primary keys: application-generated UUID v4, CHAR(36), lowercase.
+//  - Instants: DATETIME(3) in UTC. The application always supplies timestamps; the pool
+//    forces `time_zone = '+00:00'` so no session time zone can shift values.
+//  - Calendar dates (all-day appointments, local start/end dates): DATE, never through UTC.
+//  - Security-sensitive lookups (LINE ids, token/key hashes) use BINARY(32) or utf8mb4_bin
+//    columns (collation set explicitly in the migration SQL) so case can never make two
+//    identifiers equal.
+//  - Authorization is enforced in the API (MariaDB has no row-level security); constraints
+//    here keep relationships consistent.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  runtime             = "nodejs"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ───────────────────────────── Identity & access ─────────────────────────────
+
+enum UserStatus {
+  NEW // signed in with LINE, has not requested access
+  PENDING // access request awaiting an owner/admin decision
+  ACTIVE
+  REJECTED
+  SUSPENDED // temporarily blocked, can be reinstated
+  REVOKED // access removed
+}
+
+enum GlobalRole {
+  OWNER // administers users/workspaces/destinations; NO implicit appointment access
+  ADMIN // approves/rejects users, manages memberships; cannot create owners/admins
+  USER
+}
+
+model User {
+  id                 String     @id @db.Char(36)
+  displayName        String     @db.VarChar(100)
+  status             UserStatus @default(NEW)
+  globalRole         GlobalRole @default(USER)
+  /// Bumped on every authorization-relevant change (status/role/membership).
+  authzVersion       Int        @default(1)
+  createdAt          DateTime   @db.DateTime(3)
+  updatedAt          DateTime   @db.DateTime(3)
+  lastLoginAt        DateTime?  @db.DateTime(3)
+  statusChangedAt    DateTime?  @db.DateTime(3)
+
+  lineIdentity        LineIdentity?
+  sessions            Session[]
+  accessRequests      AccessRequest[]       @relation("RequestUser")
+  decidedRequests     AccessRequest[]       @relation("RequestDecider")
+  memberships         WorkspaceMember[]
+  createdWorkspaces   Workspace[]           @relation("WorkspaceCreator")
+  personalWorkspace   Workspace?            @relation("PersonalWorkspace")
+  createdInvitations  Invitation[]          @relation("InvitationCreator")
+  redeemedInvitations Invitation[]          @relation("InvitationRedeemer")
+  appointments        Appointment[]         @relation("AppointmentCreator")
+  appointmentGrants   AppointmentAccess[]
+  destinationGrants   DestinationGrant[]    @relation("GrantUser")
+  privateDestination  LineDestination?      @relation("PrivateDestination")
+  preference          UserPreference?
+  idempotencyRecords  IdempotencyRecord[]
+  auditEntries        AuditLog[]
+  appointmentEvents   AppointmentEvent[]
+
+  @@index([status])
+  @@map("users")
+}
+
+model LineIdentity {
+  id             String    @id @db.Char(36)
+  userId         String    @unique @db.Char(36)
+  /// LINE user id ("U" + 32 hex). Column collation utf8mb4_bin (migration SQL).
+  lineUserId     String    @unique @db.VarChar(33)
+  loginChannelId String    @db.VarChar(16)
+  createdAt      DateTime  @db.DateTime(3)
+  lastVerifiedAt DateTime  @db.DateTime(3)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("line_identities")
+}
+
+enum SessionEndReason {
+  LOGGED_OUT
+  REVOKED
+  EXPIRED
+  REPLACED
+}
+
+model Session {
+  id                String            @id @db.Char(36)
+  /// HMAC-SHA256(SESSION_SECRET, raw session id). The raw id only ever lives in the cookie.
+  keyHash           Bytes             @unique @db.Binary(32)
+  userId            String            @db.Char(36)
+  createdAt         DateTime          @db.DateTime(3)
+  lastSeenAt        DateTime          @db.DateTime(3)
+  absoluteExpiresAt DateTime          @db.DateTime(3)
+  endedAt           DateTime?         @db.DateTime(3)
+  endReason         SessionEndReason?
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, endedAt])
+  @@index([absoluteExpiresAt])
+  @@map("sessions")
+}
+
+model RateLimitBucket {
+  /// HMAC of "<scope>:<client>" — client addresses are never stored in clear.
+  keyHash   Bytes    @id @db.Binary(32)
+  count     Int
+  windowEnd DateTime @db.DateTime(3)
+
+  @@index([windowEnd])
+  @@map("rate_limit_buckets")
+}
+
+enum AccessRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+model AccessRequest {
+  id               String              @id @db.Char(36)
+  userId           String              @db.Char(36)
+  status           AccessRequestStatus @default(PENDING)
+  /// Equals userId while PENDING, NULL otherwise → at most one open request per user.
+  openKey          String?             @unique @db.Char(36)
+  message          String?             @db.VarChar(200)
+  invitationId     String?             @db.Char(36)
+  /// Target membership requested through an invitation (applied on approval).
+  targetWorkspaceId String?            @db.Char(36)
+  targetRole       WorkspaceRole?
+  createdAt        DateTime            @db.DateTime(3)
+  decidedAt        DateTime?           @db.DateTime(3)
+  decidedByUserId  String?             @db.Char(36)
+  user             User                @relation("RequestUser", fields: [userId], references: [id], onDelete: Cascade)
+  decidedBy        User?               @relation("RequestDecider", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  invitation       Invitation?         @relation(fields: [invitationId], references: [id], onDelete: SetNull)
+  targetWorkspace  Workspace?          @relation(fields: [targetWorkspaceId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("access_requests")
+}
+
+enum InvitationStatus {
+  ACTIVE
+  REDEEMED
+  REVOKED
+}
+
+model Invitation {
+  id               String           @id @db.Char(36)
+  /// SHA-256 of the raw token. The raw token is shown once at creation and never stored.
+  tokenHash        Bytes            @unique @db.Binary(32)
+  workspaceId      String           @db.Char(36)
+  role             WorkspaceRole
+  status           InvitationStatus @default(ACTIVE)
+  note             String?          @db.VarChar(80)
+  createdByUserId  String           @db.Char(36)
+  createdAt        DateTime         @db.DateTime(3)
+  expiresAt        DateTime         @db.DateTime(3)
+  redeemedByUserId String?          @db.Char(36)
+  redeemedAt       DateTime?        @db.DateTime(3)
+  revokedAt        DateTime?        @db.DateTime(3)
+  workspace        Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy        User             @relation("InvitationCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  redeemedBy       User?            @relation("InvitationRedeemer", fields: [redeemedByUserId], references: [id], onDelete: SetNull)
+  accessRequests   AccessRequest[]
+
+  @@index([workspaceId, status])
+  @@map("invitations")
+}
+
+// ───────────────────────────── Workspaces ─────────────────────────────
+
+enum WorkspaceKind {
+  PERSONAL
+  FAMILY
+  COMPANY
+  CUSTOM
+}
+
+enum WorkspaceStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum WorkspaceRole {
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum MemberStatus {
+  ACTIVE
+  REMOVED
+  LEFT
+}
+
+model Workspace {
+  id               String          @id @db.Char(36)
+  name             String          @db.VarChar(80)
+  kind             WorkspaceKind
+  status           WorkspaceStatus @default(ACTIVE)
+  /// Set only for PERSONAL workspaces (one per user).
+  personalOwnerId  String?         @unique @db.Char(36)
+  createdByUserId  String          @db.Char(36)
+  version          Int             @default(1)
+  createdAt        DateTime        @db.DateTime(3)
+  updatedAt        DateTime        @db.DateTime(3)
+  archivedAt       DateTime?       @db.DateTime(3)
+  createdBy        User            @relation("WorkspaceCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  personalOwner    User?           @relation("PersonalWorkspace", fields: [personalOwnerId], references: [id], onDelete: Restrict)
+  members          WorkspaceMember[]
+  invitations      Invitation[]
+  appointments     Appointment[]
+  destinations     LineDestination[]
+  accessRequests   AccessRequest[]
+
+  @@index([status])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id            String        @id @db.Char(36)
+  workspaceId   String        @db.Char(36)
+  userId        String        @db.Char(36)
+  role          WorkspaceRole
+  status        MemberStatus  @default(ACTIVE)
+  addedByUserId String?       @db.Char(36)
+  createdAt     DateTime      @db.DateTime(3)
+  updatedAt     DateTime      @db.DateTime(3)
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([userId, status])
+  @@map("workspace_members")
+}
+
+// ───────────────────────────── LINE destinations ─────────────────────────────
+
+enum DestinationKind {
+  PRIVATE_USER // a user's own 1:1 chat with Sally
+  GROUP // a LINE group Sally has joined
+}
+
+enum DestinationStatus {
+  PENDING // group joined, awaiting owner registration
+  ACTIVE
+  DISABLED
+  REMOVED // bot left / was removed
+}
+
+model LineDestination {
+  id              String            @id @db.Char(36)
+  kind            DestinationKind
+  /// LINE group id ("C…") or user id ("U…"); utf8mb4_bin. Never returned to clients.
+  lineTargetId    String            @unique @db.VarChar(33)
+  label           String            @db.VarChar(100)
+  status          DestinationStatus
+  workspaceId     String?           @db.Char(36)
+  /// PRIVATE_USER only: the user this chat belongs to.
+  userId          String?           @unique @db.Char(36)
+  /// Known audience size (null = unknown) for quota estimates.
+  audienceSize    Int?
+  createdAt       DateTime          @db.DateTime(3)
+  updatedAt       DateTime          @db.DateTime(3)
+  lastEventAt     DateTime?         @db.DateTime(3)
+  workspace       Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  user            User?             @relation("PrivateDestination", fields: [userId], references: [id], onDelete: Cascade)
+  grants          DestinationGrant[]
+  appointments    AppointmentDestination[]
+
+  @@index([status, kind])
+  @@index([workspaceId])
+  @@map("line_destinations")
+}
+
+/// Explicit permission for a user to target a GROUP destination (beyond workspace admins).
+model DestinationGrant {
+  id              String          @id @db.Char(36)
+  destinationId   String          @db.Char(36)
+  userId          String          @db.Char(36)
+  grantedByUserId String          @db.Char(36)
+  createdAt       DateTime        @db.DateTime(3)
+  destination     LineDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  user            User            @relation("GrantUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([destinationId, userId])
+  @@map("destination_grants")
+}
+
+// ───────────────────────────── Appointments ─────────────────────────────
+
+enum AppointmentVisibility {
+  PRIVATE // creator only
+  WORKSPACE // every active member of the workspace
+  SELECTED // creator + explicitly granted active members
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+model Appointment {
+  id               String                @id @db.Char(36)
+  workspaceId      String                @db.Char(36)
+  createdByUserId  String                @db.Char(36)
+  title            String                @db.VarChar(120)
+  /// System category id (packages/shared CATEGORY_IDS).
+  category         String                @db.VarChar(20)
+  allDay           Boolean
+  timeZone         String                @db.VarChar(40)
+  /// Local calendar start/end dates (inclusive). Range queries use these.
+  startDate        DateTime              @db.Date
+  endDate          DateTime              @db.Date
+  /// Timed appointments only: UTC instants.
+  startAt          DateTime?             @db.DateTime(3)
+  endAt            DateTime?             @db.DateTime(3)
+  location         String?               @db.VarChar(160)
+  notes            String?               @db.Text
+  visibility       AppointmentVisibility @default(PRIVATE)
+  status           AppointmentStatus     @default(SCHEDULED)
+  version          Int                   @default(1)
+  createdAt        DateTime              @db.DateTime(3)
+  updatedAt        DateTime              @db.DateTime(3)
+  cancelledAt      DateTime?             @db.DateTime(3)
+  cancelledByUserId String?              @db.Char(36)
+  workspace        Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  createdBy        User                  @relation("AppointmentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  accessGrants     AppointmentAccess[]
+  destinations     AppointmentDestination[]
+  reminderRules    ReminderRule[]
+  events           AppointmentEvent[]
+
+  @@index([workspaceId, startDate])
+  @@index([workspaceId, endDate])
+  @@index([createdByUserId, startDate])
+  @@index([status])
+  @@map("appointments")
+}
+
+model AppointmentAccess {
+  id            String      @id @db.Char(36)
+  appointmentId String      @db.Char(36)
+  userId        String      @db.Char(36)
+  createdAt     DateTime    @db.DateTime(3)
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([appointmentId, userId])
+  @@index([userId])
+  @@map("appointment_access")
+}
+
+enum ContentPolicy {
+  FULL // title, time, location
+  PRIVACY_SAFE // "you have an appointment at 09:00" — no title/location/notes
+}
+
+model AppointmentDestination {
+  id            String          @id @db.Char(36)
+  appointmentId String          @db.Char(36)
+  destinationId String          @db.Char(36)
+  contentPolicy ContentPolicy   @default(PRIVACY_SAFE)
+  createdAt     DateTime        @db.DateTime(3)
+  appointment   Appointment     @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  destination   LineDestination @relation(fields: [destinationId], references: [id], onDelete: Restrict)
+
+  @@unique([appointmentId, destinationId])
+  @@index([destinationId])
+  @@map("appointment_destinations")
+}
+
+enum ReminderKind {
+  RELATIVE // offsetMinutes before the anchor
+  CALENDAR // dayOffset days from the appointment's local date, at localTime
+}
+
+enum ReminderStatus {
+  SCHEDULED // eligible for EP03 delivery at fireAt
+  PAST // fireAt was already in the past when calculated — never delivered
+  DISABLED // turned off by the user
+  DUPLICATE // same instant as an earlier rule — delivered once via the earlier rule
+  CANCELLED // appointment cancelled
+}
+
+model ReminderRule {
+  id             String         @id @db.Char(36)
+  appointmentId  String         @db.Char(36)
+  /// Contract version for the EP03 scheduler (v1).
+  ruleVersion    Int            @default(1)
+  kind           ReminderKind
+  offsetMinutes  Int?
+  dayOffset      Int?
+  localTime      String?        @db.Char(5)
+  enabled        Boolean        @default(true)
+  position       Int
+  fireAt         DateTime?      @db.DateTime(3)
+  status         ReminderStatus
+  calculatedAt   DateTime       @db.DateTime(3)
+  appointment    Appointment    @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([appointmentId])
+  @@index([status, fireAt])
+  @@map("reminder_rules")
+}
+
+enum AppointmentEventType {
+  CREATED
+  UPDATED
+  RESCHEDULED
+  CANCELLED
+  REMINDERS_CHANGED
+  VISIBILITY_CHANGED
+  DESTINATIONS_CHANGED
+}
+
+model AppointmentEvent {
+  id            String               @id @db.Char(36)
+  appointmentId String               @db.Char(36)
+  actorUserId   String?              @db.Char(36)
+  type          AppointmentEventType
+  /// Changed field NAMES only (never values) — history must not leak content.
+  fields        Json?
+  createdAt     DateTime             @db.DateTime(3)
+  appointment   Appointment          @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  actor         User?                @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([appointmentId, createdAt])
+  @@map("appointment_events")
+}
+
+// ───────────────────────────── Operational ─────────────────────────────
+
+model WebhookEvent {
+  /// LINE webhookEventId (ULID). Collation utf8mb4_bin.
+  eventId     String   @id @db.VarChar(40)
+  type        String   @db.VarChar(40)
+  sourceType  String   @db.VarChar(16)
+  receivedAt  DateTime @db.DateTime(3)
+  expiresAt   DateTime @db.DateTime(3)
+
+  @@index([expiresAt])
+  @@map("webhook_events")
+}
+
+model UserPreference {
+  userId             String   @id @db.Char(36)
+  defaultWorkspaceId String?  @db.Char(36)
+  /// Default reminder rules (v1 rule objects) for new appointments.
+  defaultReminders   Json?
+  defaultVisibility  AppointmentVisibility @default(PRIVATE)
+  defaultContentPolicy ContentPolicy       @default(PRIVACY_SAFE)
+  updatedAt          DateTime @db.DateTime(3)
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+model IdempotencyRecord {
+  id        String   @id @db.Char(36)
+  userId    String   @db.Char(36)
+  scope     String   @db.VarChar(40)
+  /// Client-supplied key (UUID). Collation utf8mb4_bin.
+  key       String   @db.VarChar(64)
+  resultId  String?  @db.Char(36)
+  createdAt DateTime @db.DateTime(3)
+  expiresAt DateTime @db.DateTime(3)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}
+
+model AuditLog {
+  id            String   @id @db.Char(36)
+  actorUserId   String?  @db.Char(36)
+  action        String   @db.VarChar(60)
+  resourceType  String   @db.VarChar(40)
+  resourceId    String?  @db.Char(36)
+  workspaceId   String?  @db.Char(36)
+  /// Sanitized metadata only (ids, roles, statuses) — never titles, notes, tokens or LINE ids.
+  metadata      Json?
+  correlationId String?  @db.VarChar(64)
+  createdAt     DateTime @db.DateTime(3)
+  actor         User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([resourceType, resourceId])
+  @@index([workspaceId, createdAt])
+  @@map("audit_logs")
+}
