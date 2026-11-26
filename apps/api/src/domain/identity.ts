@@ -6,7 +6,15 @@
  * no CLI for ordinary users. Status changes bump `authzVersion` and end sessions where the
  * user must lose access immediately (suspend, revoke).
  */
-import { type Clock, ApiError, badRequest, conflictError, forbidden, newId, notFound } from '../core/context.js';
+import {
+  type Clock,
+  ApiError,
+  badRequest,
+  conflictError,
+  forbidden,
+  newId,
+  notFound,
+} from '../core/context.js';
 import type { PersistentSessions } from '../auth/persistent.js';
 import {
   type AccessRequestRow,
@@ -20,6 +28,7 @@ import {
 } from '../store/types.js';
 import { audit } from './audit.js';
 import { type Actor, canAdministerUser, canGlobal } from './policy.js';
+import { retryWriteConflict } from './transaction.js';
 
 export const PERSONAL_WORKSPACE_NAME = 'พื้นที่ส่วนตัว';
 export const PRIVATE_DESTINATION_LABEL = 'แชตส่วนตัวกับ Sally';
@@ -27,12 +36,17 @@ export const FALLBACK_DISPLAY_NAME = 'ผู้ใช้ LINE';
 
 /** Display names from LINE are untrusted text: trim, strip control chars, cap at 100 code points. */
 export function cleanDisplayName(name: string | null | undefined): string {
+  // eslint-disable-next-line no-control-regex -- Strip C0 and DEL from untrusted single-line names.
   const s = (name ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim();
   const cps = [...s];
   return cps.length ? cps.slice(0, 100).join('') : FALLBACK_DISPLAY_NAME;
 }
 
-export async function ensurePersonalWorkspace(store: Store, user: UserRow, now: Date): Promise<WorkspaceRow> {
+export async function ensurePersonalWorkspace(
+  store: Store,
+  user: UserRow,
+  now: Date,
+): Promise<WorkspaceRow> {
   const existing = await store.getPersonalWorkspace(user.id);
   if (existing) {
     await ensureMember(store, existing.id, user.id, 'ADMIN', null, now);
@@ -76,7 +90,11 @@ export async function ensureMember(
   });
 }
 
-export async function ensurePrivateDestination(store: Store, userId: string, now: Date): Promise<void> {
+export async function ensurePrivateDestination(
+  store: Store,
+  userId: string,
+  now: Date,
+): Promise<void> {
   if (await store.getPrivateDestination(userId)) return;
   const identity = await store.getIdentityByUserId(userId);
   if (!identity) return;
@@ -105,7 +123,11 @@ export class IdentityService {
   ) {}
 
   /** Called only after LINE verified the ID token. Never trusts client profile data. */
-  async upsertFromVerifiedLogin(lineUserId: string, name: string | null, loginChannelId: string): Promise<UserRow> {
+  async upsertFromVerifiedLogin(
+    lineUserId: string,
+    name: string | null,
+    loginChannelId: string,
+  ): Promise<UserRow> {
     const now = this.clock();
     const displayName = cleanDisplayName(name);
     const found = await this.store.findIdentityByLineUserId(lineUserId);
@@ -113,7 +135,10 @@ export class IdentityService {
       await this.store.updateIdentityVerifiedAt(found.user.id, now);
       const updated = await this.store.updateUser(
         found.user.id,
-        { lastLoginAt: now, ...(name && displayName !== found.user.displayName ? { displayName } : {}) },
+        {
+          lastLoginAt: now,
+          ...(name && displayName !== found.user.displayName ? { displayName } : {}),
+        },
         { now },
       );
       return updated ?? found.user;
@@ -151,7 +176,8 @@ export class IdentityService {
 
   async submitAccessRequest(actor: Actor, message: string | null): Promise<AccessRequestRow> {
     const status = actor.user.status;
-    if (status === 'PENDING') throw conflictError('ALREADY_PENDING', 'An access request is already pending');
+    if (status === 'PENDING')
+      throw conflictError('ALREADY_PENDING', 'An access request is already pending');
     if (status === 'ACTIVE') throw conflictError('ALREADY_ACTIVE', 'Access is already active');
     if (status !== 'NEW') throw forbidden(`ACCOUNT_${status}`);
     const now = this.clock();
@@ -198,18 +224,21 @@ export class IdentityService {
   ): Promise<void> {
     if (!canGlobal(admin, 'requests.decide')) throw forbidden();
     const now = this.clock();
-    await this.store.transaction(async (tx) => {
+    await retryWriteConflict(this.store, async (tx) => {
       const req = await tx.getAccessRequest(requestId);
       if (!req) throw notFound();
       const user = await tx.getUser(req.userId);
       if (!user) throw notFound();
-      if (req.status !== 'PENDING') throw conflictError('REQUEST_ALREADY_DECIDED', 'This request was already decided');
+      if (req.status !== 'PENDING')
+        throw conflictError('REQUEST_ALREADY_DECIDED', 'This request was already decided');
       const wanted = new Map<string, WorkspaceRole>();
-      if (req.targetWorkspaceId && req.targetRole) wanted.set(req.targetWorkspaceId, req.targetRole);
+      if (req.targetWorkspaceId && req.targetRole)
+        wanted.set(req.targetWorkspaceId, req.targetRole);
       for (const a of assignments) wanted.set(a.workspaceId, a.role);
       for (const wsId of wanted.keys()) {
         const ws = await tx.getWorkspace(wsId);
-        if (!ws || ws.status !== 'ACTIVE' || ws.kind === 'PERSONAL') throw badRequest('INVALID_WORKSPACE');
+        if (!ws || ws.status !== 'ACTIVE' || ws.kind === 'PERSONAL')
+          throw badRequest('INVALID_WORKSPACE');
       }
       if (!(await tx.decideAccessRequest(req.id, 'APPROVED', admin.user.id, now)))
         throw conflictError('REQUEST_ALREADY_DECIDED');
@@ -247,12 +276,16 @@ export class IdentityService {
   async rejectRequest(admin: Actor, requestId: string): Promise<void> {
     if (!canGlobal(admin, 'requests.decide')) throw forbidden();
     const now = this.clock();
-    await this.store.transaction(async (tx) => {
+    await retryWriteConflict(this.store, async (tx) => {
       const req = await tx.getAccessRequest(requestId);
       if (!req) throw notFound();
       if (!(await tx.decideAccessRequest(req.id, 'REJECTED', admin.user.id, now)))
         throw conflictError('REQUEST_ALREADY_DECIDED');
-      await tx.updateUser(req.userId, { status: 'REJECTED', statusChangedAt: now }, { now, bumpAuthz: true });
+      await tx.updateUser(
+        req.userId,
+        { status: 'REJECTED', statusChangedAt: now },
+        { now, bumpAuthz: true },
+      );
       await audit(tx, {
         actorUserId: admin.user.id,
         action: 'access.rejected',
@@ -287,11 +320,16 @@ export class IdentityService {
         revoke: ['ACTIVE', 'SUSPENDED', 'PENDING', 'NEW'],
         reactivate: ['REVOKED', 'REJECTED'],
       };
-      if (!allowed[action].includes(from)) throw conflictError('INVALID_TRANSITION', 'Not possible in the current status');
+      if (!allowed[action].includes(from))
+        throw conflictError('INVALID_TRANSITION', 'Not possible in the current status');
       const to: UserRow['status'] =
         action === 'suspend' ? 'SUSPENDED' : action === 'revoke' ? 'REVOKED' : 'ACTIVE';
       if (to !== 'ACTIVE') await this.assertNotLastOwner(tx, target);
-      const updated = await tx.updateUser(target.id, { status: to, statusChangedAt: now }, { now, bumpAuthz: true });
+      const updated = await tx.updateUser(
+        target.id,
+        { status: to, statusChangedAt: now },
+        { now, bumpAuthz: true },
+      );
       if (!updated) throw conflictError();
       if (to === 'ACTIVE') {
         await ensurePersonalWorkspace(tx, updated, now);
@@ -311,11 +349,16 @@ export class IdentityService {
       });
       return updated;
     });
-    if (result.status === 'SUSPENDED' || result.status === 'REVOKED') await this.sessions?.revokeUser(result.id);
+    if (result.status === 'SUSPENDED' || result.status === 'REVOKED')
+      await this.sessions?.revokeUser(result.id);
     return result;
   }
 
-  async setGlobalRole(owner: Actor, userId: string, role: Exclude<GlobalRole, 'OWNER'>): Promise<UserRow> {
+  async setGlobalRole(
+    owner: Actor,
+    userId: string,
+    role: Exclude<GlobalRole, 'OWNER'>,
+  ): Promise<UserRow> {
     if (!canGlobal(owner, 'users.role')) throw forbidden();
     if (userId === owner.user.id) throw forbidden('CANNOT_CHANGE_OWN_ROLE');
     const now = this.clock();
@@ -325,7 +368,11 @@ export class IdentityService {
       if (target.status !== 'ACTIVE') throw conflictError('USER_NOT_ACTIVE');
       if (target.globalRole === role) return target;
       if (target.globalRole === 'OWNER') await this.assertNotLastOwner(tx, target);
-      const updated = await tx.updateUser(target.id, { globalRole: role }, { now, bumpAuthz: true });
+      const updated = await tx.updateUser(
+        target.id,
+        { globalRole: role },
+        { now, bumpAuthz: true },
+      );
       if (!updated) throw conflictError();
       await audit(tx, {
         actorUserId: owner.user.id,
@@ -340,21 +387,33 @@ export class IdentityService {
   }
 
   /** Owner Console membership assignment (role null = remove). */
-  async setMembership(admin: Actor, userId: string, workspaceId: string, role: WorkspaceRole | null): Promise<void> {
+  async setMembership(
+    admin: Actor,
+    userId: string,
+    workspaceId: string,
+    role: WorkspaceRole | null,
+  ): Promise<void> {
     if (!canGlobal(admin, 'users.memberships')) throw forbidden();
     const now = this.clock();
     await this.store.transaction(async (tx) => {
       const target = await tx.getUser(userId);
       const ws = await tx.getWorkspace(workspaceId);
       if (!target || !ws) throw notFound();
-      if (admin.user.globalRole === 'ADMIN' && target.globalRole !== 'USER' && target.id !== admin.user.id)
+      if (
+        admin.user.globalRole === 'ADMIN' &&
+        target.globalRole !== 'USER' &&
+        target.id !== admin.user.id
+      )
         throw forbidden();
       if (ws.kind === 'PERSONAL' || ws.status !== 'ACTIVE') throw badRequest('INVALID_WORKSPACE');
       if (role !== null && target.status !== 'ACTIVE') throw conflictError('USER_NOT_ACTIVE');
       const current = await tx.getMember(workspaceId, userId);
       if (current?.status === 'ACTIVE' && current.role === 'ADMIN' && role !== 'ADMIN') {
-        const admins = (await tx.listMembers(workspaceId, ['ACTIVE'])).filter((m) => m.role === 'ADMIN');
-        if (admins.length <= 1) throw conflictError('LAST_WORKSPACE_ADMIN', 'A workspace needs at least one admin');
+        const admins = (await tx.listMembers(workspaceId, ['ACTIVE'])).filter(
+          (m) => m.role === 'ADMIN',
+        );
+        if (admins.length <= 1)
+          throw conflictError('LAST_WORKSPACE_ADMIN', 'A workspace needs at least one admin');
       }
       if (role === null) {
         if (!current || current.status !== 'ACTIVE') return;
@@ -369,7 +428,11 @@ export class IdentityService {
         resourceType: 'workspace',
         resourceId: workspaceId,
         workspaceId,
-        meta: { targetUserId: userId, fromRole: current?.status === 'ACTIVE' ? current.role : null, toRole: role },
+        meta: {
+          targetUserId: userId,
+          fromRole: current?.status === 'ACTIVE' ? current.role : null,
+          toRole: role,
+        },
         at: now,
       });
     });
@@ -382,7 +445,12 @@ export class IdentityService {
  */
 export async function importOwner(
   store: Store,
-  input: { lineUserId: string; displayName: string | null; loginChannelId: string; allowAdditionalOwner: boolean },
+  input: {
+    lineUserId: string;
+    displayName: string | null;
+    loginChannelId: string;
+    allowAdditionalOwner: boolean;
+  },
   now: Date,
 ): Promise<{ outcome: 'created' | 'promoted' | 'unchanged'; userId: string }> {
   if (!/^U[0-9a-f]{32}$/.test(input.lineUserId)) throw new ApiError(400, 'INVALID_LINE_ID');
@@ -397,20 +465,43 @@ export async function importOwner(
         return { outcome: 'unchanged' as const, userId: u.id };
       }
       if (u.status === 'REVOKED' || u.status === 'SUSPENDED')
-        throw new ApiError(409, 'CONFLICTING_STATUS', 'This identity is suspended or revoked; resolve it first');
+        throw new ApiError(
+          409,
+          'CONFLICTING_STATUS',
+          'This identity is suspended or revoked; resolve it first',
+        );
       if (owners > 0 && !input.allowAdditionalOwner)
-        throw new ApiError(409, 'OWNER_EXISTS', 'Another active owner exists (use --allow-additional-owner)');
-      const p = await tx.updateUser(u.id, { status: 'ACTIVE', globalRole: 'OWNER', statusChangedAt: now }, { now, bumpAuthz: true });
+        throw new ApiError(
+          409,
+          'OWNER_EXISTS',
+          'Another active owner exists (use --allow-additional-owner)',
+        );
+      const p = await tx.updateUser(
+        u.id,
+        { status: 'ACTIVE', globalRole: 'OWNER', statusChangedAt: now },
+        { now, bumpAuthz: true },
+      );
       if (!p) throw new ApiError(409, 'CONFLICT');
       await ensurePersonalWorkspace(tx, p, now);
       await ensurePrivateDestination(tx, p.id, now);
       const open = await tx.getOpenAccessRequest(u.id);
       if (open) await tx.decideAccessRequest(open.id, 'APPROVED', null, now);
-      await audit(tx, { actorUserId: null, action: 'owner.imported', resourceType: 'user', resourceId: u.id, meta: { reason: 'promoted' }, at: now });
+      await audit(tx, {
+        actorUserId: null,
+        action: 'owner.imported',
+        resourceType: 'user',
+        resourceId: u.id,
+        meta: { reason: 'promoted' },
+        at: now,
+      });
       return { outcome: 'promoted' as const, userId: u.id };
     }
     if (owners > 0 && !input.allowAdditionalOwner)
-      throw new ApiError(409, 'OWNER_EXISTS', 'Another active owner exists (use --allow-additional-owner)');
+      throw new ApiError(
+        409,
+        'OWNER_EXISTS',
+        'Another active owner exists (use --allow-additional-owner)',
+      );
     const user: UserRow = {
       id: newId(),
       displayName: cleanDisplayName(input.displayName),
@@ -432,7 +523,14 @@ export async function importOwner(
     });
     await ensurePersonalWorkspace(tx, user, now);
     await ensurePrivateDestination(tx, user.id, now);
-    await audit(tx, { actorUserId: null, action: 'owner.imported', resourceType: 'user', resourceId: user.id, meta: { reason: 'created' }, at: now });
+    await audit(tx, {
+      actorUserId: null,
+      action: 'owner.imported',
+      resourceType: 'user',
+      resourceId: user.id,
+      meta: { reason: 'created' },
+      at: now,
+    });
     return { outcome: 'created' as const, userId: user.id };
   });
 }

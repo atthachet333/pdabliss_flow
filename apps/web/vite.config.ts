@@ -26,6 +26,8 @@ export default defineConfig(({ mode }) => ({
   },
   preview: { host: '127.0.0.1', port: WEB_PORT, strictPort: true },
   build: {
+    // The gateway's font-src permits same-origin files. Keep font subsets out of data URLs.
+    assetsInlineLimit: (filePath) => (/\.woff2?$/i.test(filePath) ? false : undefined),
     sourcemap: mode !== 'production',
     target: 'es2022',
   },

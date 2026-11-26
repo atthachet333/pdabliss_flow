@@ -18,7 +18,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import type { SessionRole } from './sessions.js';
+/** EP01 access-file roles (read only by the owner import). */
+export type SessionRole = 'owner' | 'tester';
 
 export const ACCESS_FILE = 'access.json';
 export const PENDING_FILE = 'pending-enrollments.json';

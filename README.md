@@ -14,7 +14,7 @@ Designed & Engineered by PDA BLISS.
 Project folder (local workstation, **not** production):
 `D:\One Drive\OneDrive\Desktop\project\pdabliss_flow`
 
-Requirements: Node.js **22.12+**, npm 10+, Git. PostgreSQL is not needed for EP00.
+Requirements: Node.js **22.12+**, npm 10+, Git. EP02 adds a local MariaDB server (development + test databases only; see docs/EP02-DATABASE.md and `scripts/ep02-db-setup.ps1`).
 
 ```powershell
 cd "D:\One Drive\OneDrive\Desktop\project\pdabliss_flow"

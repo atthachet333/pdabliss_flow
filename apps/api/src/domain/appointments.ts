@@ -28,7 +28,14 @@ import {
   validateFlexMessage,
   zonedLocalToUtc,
 } from '@flow/shared';
-import { type Clock, ApiError, badRequest, conflictError, newId, notFound } from '../core/context.js';
+import {
+  type Clock,
+  ApiError,
+  badRequest,
+  conflictError,
+  newId,
+  notFound,
+} from '../core/context.js';
 import {
   type AppointmentBundle,
   type AppointmentEventType,
@@ -80,13 +87,22 @@ interface Timing {
 export function computeTiming(input: AppointmentInput, now: Date): Timing {
   if (!isValidTimeZone(input.timeZone)) throw badRequest('INVALID_TIMEZONE');
   const today = toLocalDateString(now, input.timeZone);
-  if (Math.abs(daysBetween(today, input.date)) > YEARS_WINDOW * 366) throw badRequest('DATE_OUT_OF_RANGE');
+  if (Math.abs(daysBetween(today, input.date)) > YEARS_WINDOW * 366)
+    throw badRequest('DATE_OUT_OF_RANGE');
   if (input.allDay) {
     const endDate = input.endDate ?? input.date;
     const span = daysBetween(input.date, endDate);
     if (span < 0) throw badRequest('END_BEFORE_START');
     if (span >= MAX_ALL_DAY_SPAN_DAYS) throw badRequest('SPAN_TOO_LONG');
-    return { allDay: true, timeZone: input.timeZone, startDate: input.date, endDate, startAt: null, endAt: null, startTime: null };
+    return {
+      allDay: true,
+      timeZone: input.timeZone,
+      startDate: input.date,
+      endDate,
+      startAt: null,
+      endAt: null,
+      startTime: null,
+    };
   }
   const startTime = input.startTime as string;
   const startAt = zonedLocalToUtc(input.date, startTime, input.timeZone);
@@ -94,7 +110,8 @@ export function computeTiming(input: AppointmentInput, now: Date): Timing {
   if (input.endTime) {
     endAt = zonedLocalToUtc(input.endDate ?? input.date, input.endTime, input.timeZone);
     if (endAt.getTime() <= startAt.getTime()) throw badRequest('END_BEFORE_START');
-    if (endAt.getTime() - startAt.getTime() > MAX_ALL_DAY_SPAN_DAYS * 86_400_000) throw badRequest('SPAN_TOO_LONG');
+    if (endAt.getTime() - startAt.getTime() > MAX_ALL_DAY_SPAN_DAYS * 86_400_000)
+      throw badRequest('SPAN_TOO_LONG');
   } else if (input.endDate && input.endDate !== input.date) {
     throw badRequest('END_TIME_REQUIRED');
   }
@@ -113,7 +130,12 @@ const ruleInputs = (rules: ReminderRuleDto[]) =>
   rules.map((r) =>
     r.kind === 'RELATIVE'
       ? { kind: 'RELATIVE' as const, offsetMinutes: r.offsetMinutes, enabled: r.enabled }
-      : { kind: 'CALENDAR' as const, dayOffset: r.dayOffset, localTime: r.localTime, enabled: r.enabled },
+      : {
+          kind: 'CALENDAR' as const,
+          dayOffset: r.dayOffset,
+          localTime: r.localTime,
+          enabled: r.enabled,
+        },
   );
 
 export function buildReminderRows(
@@ -124,12 +146,20 @@ export function buildReminderRows(
   now: Date,
 ): ReminderRuleRow[] {
   const calc = calculateReminders(
-    { allDay: timing.allDay, localDate: timing.startDate, localTime: timing.startTime, timeZone: timing.timeZone, cancelled },
+    {
+      allDay: timing.allDay,
+      localDate: timing.startDate,
+      localTime: timing.startTime,
+      timeZone: timing.timeZone,
+      cancelled,
+    },
     ruleInputs(rules),
     now,
   );
   if (!calc.valid) {
-    const issues = calc.reminders.filter((r) => r.issue).map((r) => ({ index: r.index, issue: r.issue }));
+    const issues = calc.reminders
+      .filter((r) => r.issue)
+      .map((r) => ({ index: r.index, issue: r.issue }));
     throw badRequest('INVALID_REMINDERS', { reminders: issues });
   }
   return calc.reminders.map((c, i) => {
@@ -155,7 +185,12 @@ function rulesFromRows(rows: ReminderRuleRow[]): ReminderRuleDto[] {
   return rows.map((r) =>
     r.kind === 'RELATIVE'
       ? { kind: 'RELATIVE', offsetMinutes: r.offsetMinutes ?? 0, enabled: r.enabled }
-      : { kind: 'CALENDAR', dayOffset: r.dayOffset ?? 0, localTime: r.localTime ?? '06:00', enabled: r.enabled },
+      : {
+          kind: 'CALENDAR',
+          dayOffset: r.dayOffset ?? 0,
+          localTime: r.localTime ?? '06:00',
+          enabled: r.enabled,
+        },
   );
 }
 
@@ -178,7 +213,9 @@ export class AppointmentService {
       (await store.listMembers(input.workspaceId, ['ACTIVE'])).map((m) => [m.userId, m]),
     );
     const activeUsers = new Set(
-      (await store.getUsers([...members.keys()])).filter((u) => u.status === 'ACTIVE').map((u) => u.id),
+      (await store.getUsers([...members.keys()]))
+        .filter((u) => u.status === 'ACTIVE')
+        .map((u) => u.id),
     );
     for (const uid of input.sharedWithUserIds) {
       if (uid === creatorId || !members.has(uid) || !activeUsers.has(uid))
@@ -203,10 +240,15 @@ export class AppointmentService {
         category: input.category,
         contentPolicy: d.contentPolicy,
         confirmSensitive: input.confirmSensitive,
-        recipientIsActiveMember: row.userId ? members.has(row.userId) && activeUsers.has(row.userId) : false,
+        recipientIsActiveMember: row.userId
+          ? members.has(row.userId) && activeUsers.has(row.userId)
+          : false,
         actorHasGrant: grants.has(row.id),
       });
-      if (!decision.ok) throw badRequest(decision.code === 'DESTINATION_UNAVAILABLE' ? 'DESTINATION_NOT_PERMITTED' : decision.code);
+      if (!decision.ok)
+        throw badRequest(
+          decision.code === 'DESTINATION_UNAVAILABLE' ? 'DESTINATION_NOT_PERMITTED' : decision.code,
+        );
       out.push({ row, policy: d.contentPolicy });
     }
     return { destinations: out };
@@ -245,12 +287,14 @@ export class AppointmentService {
     };
     return {
       appointment,
-      accessGrants: (input.visibility === 'SELECTED' ? input.sharedWithUserIds : []).map((userId) => ({
-        id: newId(),
-        appointmentId: id,
-        userId,
-        createdAt: now,
-      })),
+      accessGrants: (input.visibility === 'SELECTED' ? input.sharedWithUserIds : []).map(
+        (userId) => ({
+          id: newId(),
+          appointmentId: id,
+          userId,
+          createdAt: now,
+        }),
+      ),
       destinations: destinations.map((d) => ({
         id: newId(),
         appointmentId: id,
@@ -264,11 +308,20 @@ export class AppointmentService {
 
   // ───────────────────────── commands
 
-  async create(actor: Actor, input: AppointmentInput, idempotencyKey: string): Promise<{ id: string; replayed: boolean }> {
-    if (!canInWorkspace(actor, 'appointment.create', input.workspaceId)) throw badRequest('WORKSPACE_NOT_PERMITTED');
+  async create(
+    actor: Actor,
+    input: AppointmentInput,
+    idempotencyKey: string,
+  ): Promise<{ id: string; replayed: boolean }> {
+    if (!canInWorkspace(actor, 'appointment.create', input.workspaceId))
+      throw badRequest('WORKSPACE_NOT_PERMITTED');
     const now = this.clock();
     const timing = computeTiming(input, now);
-    const existing = await this.store.getIdempotency(actor.user.id, IDEMPOTENCY_SCOPE_CREATE, idempotencyKey);
+    const existing = await this.store.getIdempotency(
+      actor.user.id,
+      IDEMPOTENCY_SCOPE_CREATE,
+      idempotencyKey,
+    );
     if (existing?.resultId) return { id: existing.resultId, replayed: true };
     try {
       return await this.store.transaction(async (tx) => {
@@ -287,7 +340,14 @@ export class AppointmentService {
           createdAt: now,
           expiresAt: new Date(now.getTime() + IDEMPOTENCY_TTL_MS),
         });
-        await tx.appendAppointmentEvent({ id: newId(), appointmentId: id, actorUserId: actor.user.id, type: 'CREATED', fields: null, createdAt: now });
+        await tx.appendAppointmentEvent({
+          id: newId(),
+          appointmentId: id,
+          actorUserId: actor.user.id,
+          type: 'CREATED',
+          fields: null,
+          createdAt: now,
+        });
         await audit(tx, {
           actorUserId: actor.user.id,
           action: 'appointment.created',
@@ -301,7 +361,11 @@ export class AppointmentService {
       });
     } catch (err) {
       if (err instanceof StoreConflictError) {
-        const again = await this.store.getIdempotency(actor.user.id, IDEMPOTENCY_SCOPE_CREATE, idempotencyKey);
+        const again = await this.store.getIdempotency(
+          actor.user.id,
+          IDEMPOTENCY_SCOPE_CREATE,
+          idempotencyKey,
+        );
         if (again?.resultId) return { id: again.resultId, replayed: true };
         throw conflictError('REQUEST_IN_PROGRESS', 'This appointment is already being saved');
       }
@@ -314,25 +378,50 @@ export class AppointmentService {
     await this.store.transaction(async (tx) => {
       const current = await tx.getAppointment(id);
       if (!current || !canViewAppointment(actor, current)) throw notFound();
-      if (!canEditAppointment(actor, current)) throw new ApiError(403, 'FORBIDDEN', 'Not permitted');
-      if (current.appointment.status === 'CANCELLED') throw conflictError('APPOINTMENT_CANCELLED', 'Cancelled appointments cannot be edited');
-      if (input.workspaceId !== current.appointment.workspaceId) throw badRequest('WORKSPACE_IMMUTABLE');
+      if (!canEditAppointment(actor, current))
+        throw new ApiError(403, 'FORBIDDEN', 'Not permitted');
+      if (current.appointment.status === 'CANCELLED')
+        throw conflictError('APPOINTMENT_CANCELLED', 'Cancelled appointments cannot be edited');
+      if (input.workspaceId !== current.appointment.workspaceId)
+        throw badRequest('WORKSPACE_IMMUTABLE');
       if (current.appointment.version !== version) throw conflictError('VERSION_CONFLICT');
       const timing = computeTiming(input, now);
       const creatorId = current.appointment.createdByUserId;
       if (creatorId !== actor.user.id) {
-        const prevShared = current.accessGrants.map((g) => g.userId).sort().join();
+        const prevShared = current.accessGrants
+          .map((g) => g.userId)
+          .sort()
+          .join();
         const nextShared = [...input.sharedWithUserIds].sort().join();
         if (input.visibility !== current.appointment.visibility || prevShared !== nextShared)
-          throw new ApiError(403, 'ONLY_CREATOR_CHANGES_VISIBILITY', 'Only the creator can change who sees this');
+          throw new ApiError(
+            403,
+            'ONLY_CREATOR_CHANGES_VISIBILITY',
+            'Only the creator can change who sees this',
+          );
       }
       const { destinations } = await this.validateAudience(actor, creatorId, input, tx);
-      const next = this.bundleFrom(id, actor, input, timing, destinations, current.appointment, now);
+      const next = this.bundleFrom(
+        id,
+        actor,
+        input,
+        timing,
+        destinations,
+        current.appointment,
+        now,
+      );
       if (!(await tx.updateAppointment(id, version, next))) throw conflictError('VERSION_CONFLICT');
       const changed = diffFields(current, next);
       const types = eventTypes(changed);
       for (const type of types)
-        await tx.appendAppointmentEvent({ id: newId(), appointmentId: id, actorUserId: actor.user.id, type, fields: changed, createdAt: now });
+        await tx.appendAppointmentEvent({
+          id: newId(),
+          appointmentId: id,
+          actorUserId: actor.user.id,
+          type,
+          fields: changed,
+          createdAt: now,
+        });
       await audit(tx, {
         actorUserId: actor.user.id,
         action: 'appointment.updated',
@@ -350,16 +439,34 @@ export class AppointmentService {
     await this.store.transaction(async (tx) => {
       const current = await tx.getAppointment(id);
       if (!current || !canViewAppointment(actor, current)) throw notFound();
-      if (!canEditAppointment(actor, current)) throw new ApiError(403, 'FORBIDDEN', 'Not permitted');
+      if (!canEditAppointment(actor, current))
+        throw new ApiError(403, 'FORBIDDEN', 'Not permitted');
       if (current.appointment.status === 'CANCELLED') return;
       if (current.appointment.version !== version) throw conflictError('VERSION_CONFLICT');
       const a = current.appointment;
       const ok = await tx.updateAppointment(id, version, {
-        appointment: { ...a, status: 'CANCELLED', cancelledAt: now, cancelledByUserId: actor.user.id, updatedAt: now },
-        reminderRules: current.reminderRules.map((r) => ({ ...r, status: 'CANCELLED', calculatedAt: now })),
+        appointment: {
+          ...a,
+          status: 'CANCELLED',
+          cancelledAt: now,
+          cancelledByUserId: actor.user.id,
+          updatedAt: now,
+        },
+        reminderRules: current.reminderRules.map((r) => ({
+          ...r,
+          status: 'CANCELLED',
+          calculatedAt: now,
+        })),
       });
       if (!ok) throw conflictError('VERSION_CONFLICT');
-      await tx.appendAppointmentEvent({ id: newId(), appointmentId: id, actorUserId: actor.user.id, type: 'CANCELLED', fields: null, createdAt: now });
+      await tx.appendAppointmentEvent({
+        id: newId(),
+        appointmentId: id,
+        actorUserId: actor.user.id,
+        type: 'CANCELLED',
+        fields: null,
+        createdAt: now,
+      });
       await audit(tx, {
         actorUserId: actor.user.id,
         action: 'appointment.cancelled',
@@ -373,8 +480,15 @@ export class AppointmentService {
 
   // ───────────────────────── reads
 
-  private async workspaceNames(actor: Actor): Promise<Map<string, { name: string; kind: AppointmentSummaryDto['workspaceKind'] }>> {
-    return new Map([...actor.memberships.values()].map((m) => [m.workspace.id, { name: m.workspace.name, kind: m.workspace.kind }]));
+  private async workspaceNames(
+    actor: Actor,
+  ): Promise<Map<string, { name: string; kind: AppointmentSummaryDto['workspaceKind'] }>> {
+    return new Map(
+      [...actor.memberships.values()].map((m) => [
+        m.workspace.id,
+        { name: m.workspace.name, kind: m.workspace.kind },
+      ]),
+    );
   }
 
   private summary(
@@ -407,11 +521,22 @@ export class AppointmentService {
 
   async list(
     actor: Actor,
-    q: { from?: string; to?: string; workspaceId?: string; categories?: string[]; statuses?: ('SCHEDULED' | 'CANCELLED')[]; text?: string; order?: 'asc' | 'desc'; limit: number; offset?: number },
+    q: {
+      from?: string;
+      to?: string;
+      workspaceId?: string;
+      categories?: string[];
+      statuses?: ('SCHEDULED' | 'CANCELLED')[];
+      text?: string;
+      order?: 'asc' | 'desc';
+      limit: number;
+      offset?: number;
+    },
   ): Promise<{ items: AppointmentSummaryDto[]; hasMore: boolean }> {
     let workspaceIds = activeWorkspaceIds(actor);
     if (q.workspaceId) workspaceIds = workspaceIds.includes(q.workspaceId) ? [q.workspaceId] : [];
-    if (q.from && q.to && daysBetween(q.from, q.to) > MAX_RANGE_DAYS) throw badRequest('RANGE_TOO_LARGE');
+    if (q.from && q.to && daysBetween(q.from, q.to) > MAX_RANGE_DAYS)
+      throw badRequest('RANGE_TOO_LARGE');
     if (!workspaceIds.length) return { items: [], hasMore: false };
     const rows = await this.store.listAppointments({
       viewerUserId: actor.user.id,
@@ -429,7 +554,9 @@ export class AppointmentService {
     const bundles = await this.store.getAppointmentBundles(page.map((r) => r.id));
     const names = await this.workspaceNames(actor);
     // Defence in depth: re-check every row with the policy (the store predicate is the primary filter).
-    const items = bundles.filter((b) => canViewAppointment(actor, b)).map((b) => this.summary(actor, b, names));
+    const items = bundles
+      .filter((b) => canViewAppointment(actor, b))
+      .map((b) => this.summary(actor, b, names));
     return { items, hasMore: rows.length > q.limit };
   }
 
@@ -440,11 +567,16 @@ export class AppointmentService {
     const userIds = [b.appointment.createdByUserId, ...b.accessGrants.map((g) => g.userId)];
     const users = new Map((await this.store.getUsers(userIds)).map((u) => [u.id, u.displayName]));
     const destRows = b.destinations.length
-      ? await this.store.listDestinations({ ids: b.destinations.map((d) => d.destinationId), limit: 20 })
+      ? await this.store.listDestinations({
+          ids: b.destinations.map((d) => d.destinationId),
+          limit: 20,
+        })
       : [];
     const destById = new Map(destRows.map((d) => [d.id, d]));
     const privateOwners = new Map(
-      (await this.store.getUsers(destRows.filter((d) => d.userId).map((d) => d.userId as string))).map((u) => [u.id, u.displayName]),
+      (
+        await this.store.getUsers(destRows.filter((d) => d.userId).map((d) => d.userId as string))
+      ).map((u) => [u.id, u.displayName]),
     );
     const reminders: ReminderDto[] = b.reminderRules.map((r, i) => ({
       index: i,
@@ -463,7 +595,10 @@ export class AppointmentService {
       notes: a.notes,
       version: a.version,
       createdBy: { id: a.createdByUserId, displayName: users.get(a.createdByUserId) ?? '' },
-      sharedWith: b.accessGrants.map((g) => ({ id: g.userId, displayName: users.get(g.userId) ?? '' })),
+      sharedWith: b.accessGrants.map((g) => ({
+        id: g.userId,
+        displayName: users.get(g.userId) ?? '',
+      })),
       destinations: b.destinations.flatMap((d) => {
         const row = destById.get(d.destinationId);
         if (!row) return [];
@@ -488,7 +623,9 @@ export class AppointmentService {
     if (!b || !canViewAppointment(actor, b)) throw notFound();
     const rows = await this.store.listAppointmentEvents(id, 50);
     const users = new Map(
-      (await this.store.getUsers(rows.map((r) => r.actorUserId).filter((x): x is string => !!x))).map((u) => [u.id, u.displayName]),
+      (
+        await this.store.getUsers(rows.map((r) => r.actorUserId).filter((x): x is string => !!x))
+      ).map((u) => [u.id, u.displayName]),
     );
     return rows.map((r) => ({
       type: r.type,
@@ -502,13 +639,25 @@ export class AppointmentService {
     const now = this.clock();
     const today = toLocalDateString(now, timeZone);
     const horizon = addDaysToLocalDate(today, 14);
-    const { items } = await this.list(actor, { from: today, to: horizon, statuses: ['SCHEDULED'], limit: 100 });
+    const { items } = await this.list(actor, {
+      from: today,
+      to: horizon,
+      statuses: ['SCHEDULED'],
+      limit: 100,
+    });
     const todays = items.filter((i) => i.startDate <= today && i.endDate >= today);
-    const upcoming = items.filter((i) => i.startAt ? new Date(i.startAt) > now : i.startDate > today);
+    const upcoming = items.filter((i) =>
+      i.startAt ? new Date(i.startAt) > now : i.startDate > today,
+    );
     const next = upcoming[0] ?? null;
     const scheduledNextWeek = (await this.store.getAppointmentBundles(items.map((i) => i.id)))
       .flatMap((b) => b.reminderRules)
-      .filter((r) => r.status === 'SCHEDULED' && r.fireAt && r.fireAt.getTime() - now.getTime() < 7 * 86_400_000).length;
+      .filter(
+        (r) =>
+          r.status === 'SCHEDULED' &&
+          r.fireAt &&
+          r.fireAt.getTime() - now.getTime() < 7 * 86_400_000,
+      ).length;
     return {
       date: today,
       timeZone,
@@ -519,7 +668,12 @@ export class AppointmentService {
     };
   }
 
-  async calendar(actor: Actor, from: string, to: string, filters: { workspaceId?: string; categories?: string[]; includeCancelled?: boolean }) {
+  async calendar(
+    actor: Actor,
+    from: string,
+    to: string,
+    filters: { workspaceId?: string; categories?: string[]; includeCancelled?: boolean },
+  ) {
     const { items, hasMore } = await this.list(actor, {
       from,
       to,
@@ -530,17 +684,41 @@ export class AppointmentService {
     });
     const days: Record<string, number> = {};
     for (const i of items) {
-      for (let d = i.startDate < from ? from : i.startDate; d <= i.endDate && d <= to; d = addDaysToLocalDate(d, 1))
+      for (
+        let d = i.startDate < from ? from : i.startDate;
+        d <= i.endDate && d <= to;
+        d = addDaysToLocalDate(d, 1)
+      )
         days[d] = (days[d] ?? 0) + 1;
     }
     return { from, to, items, days, truncated: hasMore };
   }
 
-  async history(actor: Actor, scope: 'upcoming' | 'past' | 'cancelled', limit: number, offset: number, timeZone = 'Asia/Bangkok') {
+  async history(
+    actor: Actor,
+    scope: 'upcoming' | 'past' | 'cancelled',
+    limit: number,
+    offset: number,
+    timeZone = 'Asia/Bangkok',
+  ) {
     const today = toLocalDateString(this.clock(), timeZone);
-    if (scope === 'cancelled') return this.list(actor, { statuses: ['CANCELLED'], order: 'desc', limit, offset });
-    if (scope === 'upcoming') return this.list(actor, { from: today, statuses: ['SCHEDULED'], order: 'asc', limit, offset });
-    return this.list(actor, { to: addDaysToLocalDate(today, -1), statuses: ['SCHEDULED'], order: 'desc', limit, offset });
+    if (scope === 'cancelled')
+      return this.list(actor, { statuses: ['CANCELLED'], order: 'desc', limit, offset });
+    if (scope === 'upcoming')
+      return this.list(actor, {
+        from: today,
+        statuses: ['SCHEDULED'],
+        order: 'asc',
+        limit,
+        offset,
+      });
+    return this.list(actor, {
+      to: addDaysToLocalDate(today, -1),
+      statuses: ['SCHEDULED'],
+      order: 'desc',
+      limit,
+      offset,
+    });
   }
 
   /** Protected preview: built only from data the actor may see/use. Never sent. */
@@ -550,14 +728,17 @@ export class AppointmentService {
     ruleIndex: number,
     destinationId: string | null,
   ) {
-    if (!canInWorkspace(actor, 'appointment.create', input.workspaceId)) throw badRequest('WORKSPACE_NOT_PERMITTED');
+    if (!canInWorkspace(actor, 'appointment.create', input.workspaceId))
+      throw badRequest('WORKSPACE_NOT_PERMITTED');
     const now = this.clock();
     const timing = computeTiming(input, now);
     const rules = buildReminderRows('preview', timing, input.reminders, false, now);
     const rule = rules[ruleIndex];
     if (!rule || !rule.fireAt) throw badRequest('INVALID_RULE_INDEX');
     const { destinations } = await this.validateAudience(actor, actor.user.id, input, this.store);
-    const dest = destinationId ? destinations.find((d) => d.row.id === destinationId) : destinations[0];
+    const dest = destinationId
+      ? destinations.find((d) => d.row.id === destinationId)
+      : destinations[0];
     if (destinationId && !dest) throw badRequest('DESTINATION_NOT_PERMITTED');
     const minimal = dest ? dest.policy === 'PRIVACY_SAFE' : false;
     const start = timing.startAt ?? zonedLocalToUtc(timing.startDate, '08:00', timing.timeZone);
@@ -571,12 +752,21 @@ export class AppointmentService {
       location: dest?.policy === 'FULL' ? input.location : null,
       reminder: { kind: rule.kind, offsetMinutes: rule.offsetMinutes, fireAt: rule.fireAt },
       ...(dest
-        ? { destination: { displayName: dest.row.kind === 'PRIVATE_USER' ? 'แชตส่วนตัว' : dest.row.label, kind: dest.row.kind === 'GROUP' ? 'line-group' as const : 'private-self' as const } }
+        ? {
+            destination: {
+              displayName: dest.row.kind === 'PRIVATE_USER' ? 'แชตส่วนตัว' : dest.row.label,
+              kind: dest.row.kind === 'GROUP' ? ('line-group' as const) : ('private-self' as const),
+            },
+          }
         : {}),
       minimalDisclosure: minimal,
       now,
     });
-    const detailUri = `${(this.publicBaseUrl ?? 'https://flow.pdabliss.com').replace(/\/$/, '')}/today`;
+    // LINE Flex actions require HTTPS even when the local preview is served over loopback HTTP.
+    const linkBase = this.publicBaseUrl?.startsWith('https://')
+      ? this.publicBaseUrl
+      : 'https://flow.pdabliss.com';
+    const detailUri = `${linkBase.replace(/\/$/, '')}/today`;
     const message = toFlexMessage(model, detailUri);
     return {
       preview: true as const,
@@ -589,7 +779,11 @@ export class AppointmentService {
   }
 
   /** Local estimate only — never LINE-reported consumption. */
-  async estimate(actor: Actor, input: AppointmentInput, quota: { limit: number | null; used: number | null }) {
+  async estimate(
+    actor: Actor,
+    input: AppointmentInput,
+    quota: { limit: number | null; used: number | null },
+  ) {
     const now = this.clock();
     const timing = computeTiming(input, now);
     const rules = buildReminderRows('estimate', timing, input.reminders, false, now);
@@ -602,7 +796,12 @@ export class AppointmentService {
         memberCount: d.row.kind === 'GROUP' ? d.row.audienceSize : 1,
       })),
       scheduled,
-      { monthlyLimit: quota.limit ?? 0, consumedThisMonth: quota.used ?? 0, reservedThisMonth: 0, safetyReserve: 0 },
+      {
+        monthlyLimit: quota.limit ?? 0,
+        consumedThisMonth: quota.used ?? 0,
+        reservedThisMonth: 0,
+        safetyReserve: 0,
+      },
     );
     return { estimate: est, quotaKnown: quota.limit !== null, scheduledReminders: scheduled };
   }
@@ -612,7 +811,9 @@ export class AppointmentService {
     const b = await this.store.getAppointment(id);
     if (!b || !canViewAppointment(actor, b)) throw notFound();
     const a = b.appointment;
-    const workspaceId = canInWorkspace(actor, 'appointment.create', a.workspaceId) ? a.workspaceId : null;
+    const workspaceId = canInWorkspace(actor, 'appointment.create', a.workspaceId)
+      ? a.workspaceId
+      : null;
     return {
       workspaceId,
       title: a.title,
@@ -632,30 +833,61 @@ export class AppointmentService {
 }
 
 function labelFor(r: ReminderRuleRow): string {
-  return reminderLabelTh({ kind: r.kind, offsetMinutes: r.offsetMinutes, dayOffset: r.dayOffset, localTime: r.localTime, enabled: r.enabled });
+  return reminderLabelTh({
+    kind: r.kind,
+    offsetMinutes: r.offsetMinutes,
+    dayOffset: r.dayOffset,
+    localTime: r.localTime,
+    enabled: r.enabled,
+  });
 }
 
 function diffFields(prev: AppointmentBundle, next: AppointmentBundle): string[] {
   const a = prev.appointment;
   const b = next.appointment;
   const fields: string[] = [];
-  const keys: (keyof AppointmentRow)[] = ['title', 'category', 'location', 'notes', 'visibility', 'allDay', 'startDate', 'endDate', 'timeZone'];
+  const keys: (keyof AppointmentRow)[] = [
+    'title',
+    'category',
+    'location',
+    'notes',
+    'visibility',
+    'allDay',
+    'startDate',
+    'endDate',
+    'timeZone',
+  ];
   for (const k of keys) if (a[k] !== b[k]) fields.push(k);
   if ((a.startAt?.getTime() ?? null) !== (b.startAt?.getTime() ?? null)) fields.push('startAt');
   if ((a.endAt?.getTime() ?? null) !== (b.endAt?.getTime() ?? null)) fields.push('endAt');
-  const grants = (x: AppointmentBundle) => x.accessGrants.map((g) => g.userId).sort().join();
+  const grants = (x: AppointmentBundle) =>
+    x.accessGrants
+      .map((g) => g.userId)
+      .sort()
+      .join();
   if (grants(prev) !== grants(next)) fields.push('sharedWith');
-  const dests = (x: AppointmentBundle) => x.destinations.map((d) => `${d.destinationId}:${d.contentPolicy}`).sort().join();
+  const dests = (x: AppointmentBundle) =>
+    x.destinations
+      .map((d) => `${d.destinationId}:${d.contentPolicy}`)
+      .sort()
+      .join();
   if (dests(prev) !== dests(next)) fields.push('destinations');
   const rules = (x: AppointmentBundle) =>
-    x.reminderRules.map((r) => `${r.kind}:${r.offsetMinutes}:${r.dayOffset}:${r.localTime}:${r.enabled}`).join('|');
+    x.reminderRules
+      .map((r) => `${r.kind}:${r.offsetMinutes}:${r.dayOffset}:${r.localTime}:${r.enabled}`)
+      .join('|');
   if (rules(prev) !== rules(next)) fields.push('reminders');
   return fields;
 }
 
 function eventTypes(fields: string[]): AppointmentEventType[] {
   const t = new Set<AppointmentEventType>();
-  if (fields.some((f) => ['startDate', 'endDate', 'startAt', 'endAt', 'allDay', 'timeZone'].includes(f))) t.add('RESCHEDULED');
+  if (
+    fields.some((f) =>
+      ['startDate', 'endDate', 'startAt', 'endAt', 'allDay', 'timeZone'].includes(f),
+    )
+  )
+    t.add('RESCHEDULED');
   if (fields.includes('visibility') || fields.includes('sharedWith')) t.add('VISIBILITY_CHANGED');
   if (fields.includes('destinations')) t.add('DESTINATIONS_CHANGED');
   if (fields.includes('reminders')) t.add('REMINDERS_CHANGED');

@@ -41,7 +41,9 @@ export const API_PREFIXES: ReadonlyArray<readonly [ReadonlySet<string>, RegExp]>
 export function apiAllowed(method: string, path: string): boolean {
   return (
     API_ALLOWLIST.some(([m, p]) => m === method && p === path) ||
-    API_PREFIXES.some(([methods, re]) => methods.has(method) && re.test(path) && !path.includes('//'))
+    API_PREFIXES.some(
+      ([methods, re]) => methods.has(method) && re.test(path) && !path.includes('//'),
+    )
   );
 }
 

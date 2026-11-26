@@ -2,8 +2,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApp } from './app.js';
 import { loadSecretFile, mergeEnv, SecretFileError } from './config/secret-file.js';
-import { DbGuardError, describeTarget, parseDatabaseUrl } from './db/guard.js';
+import { DB_NAMES, DbGuardError, describeTarget, parseDatabaseUrl } from './db/guard.js';
 import { EnvError, isAuthConfigured, isWebhookConfigured, loadEnv, type AppEnv } from './env.js';
+import { HOUSEKEEPING_INTERVAL_MS, runHousekeeping } from './store/housekeeping.js';
 import { createPrismaClient, PrismaStore } from './store/prisma.js';
 import type { Store } from './store/types.js';
 
@@ -27,9 +28,22 @@ async function main() {
     if (merged.DATABASE_URL) {
       // NODE_ENV=test + FLOW_DB_PURPOSE=test lets the smoke harness run the API on the TEST
       // database; every other combination is pinned to the development database.
-      const purpose = merged.NODE_ENV === 'test' && merged.FLOW_DB_PURPOSE === 'test' ? 'test' : 'dev-runtime';
-      store = new PrismaStore(createPrismaClient(merged.DATABASE_URL, purpose));
+      const purpose =
+        merged.NODE_ENV === 'test' && merged.FLOW_DB_PURPOSE === 'test' ? 'test' : 'dev-runtime';
+      const prismaStore = new PrismaStore(createPrismaClient(merged.DATABASE_URL, purpose));
       databaseTarget = describeTarget(parseDatabaseUrl(merged.DATABASE_URL));
+      // Fail closed: an unreachable or unexpected database stops start-up. There is no
+      // in-memory fallback in the server — MemoryStore exists only inside automated tests.
+      try {
+        await prismaStore.verifyConnection(purpose === 'test' ? DB_NAMES.test : DB_NAMES.dev);
+      } catch (e) {
+        await prismaStore.close().catch(() => undefined);
+        console.error(
+          `FLOW API not started: database check failed for ${databaseTarget} (${e instanceof Error && e.message.startsWith('Connected') ? e.message : 'connection refused or not ready'}). Start MariaDB or run scripts/ep02-db-setup.ps1.`,
+        );
+        process.exit(1);
+      }
+      store = prismaStore;
     }
   } catch (err) {
     if (err instanceof EnvError || err instanceof SecretFileError || err instanceof DbGuardError) {
@@ -56,6 +70,21 @@ async function main() {
     'FLOW API integration status',
   );
 
+  // Bounded storage (sessions, rate-limit windows, webhook ids, idempotency keys).
+  const housekeeping = store
+    ? setInterval(() => {
+        runHousekeeping(store, new Date()).then(
+          (n) => app.log.info({ purged: n }, 'Housekeeping'),
+          (e: unknown) =>
+            app.log.warn(
+              { errClass: e instanceof Error ? e.name : 'unknown' },
+              'Housekeeping failed',
+            ),
+        );
+      }, HOUSEKEEPING_INTERVAL_MS)
+    : null;
+  housekeeping?.unref();
+
   let closing = false;
   const shutdown = async (signal: string) => {
     if (closing) return;
@@ -66,6 +95,7 @@ async function main() {
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     timer.unref();
+    if (housekeeping) clearInterval(housekeeping);
     try {
       await app.close();
       await store?.close();

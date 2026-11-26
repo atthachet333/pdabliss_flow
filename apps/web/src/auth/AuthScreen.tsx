@@ -1,6 +1,6 @@
 /**
- * Presentational EP01 auth screens (A–K). Pure props → markup, so the dev-only
- * /dev/auth-states page can render every state with simulated identities.
+ * Presentational auth screens (EP01 A–K; EP02 account states). Pure props → markup, so the
+ * dev-only /dev/auth-states page can render every state with simulated identities.
  */
 import { useEffect, useState, type ReactNode } from 'react';
 import { formatThaiDate, formatThaiTime } from '@flow/shared';
@@ -18,6 +18,8 @@ export interface AuthScreenActions {
   onRetry: () => void;
   onLogout: () => void;
   onCheckLine?: () => Promise<LineStatus>;
+  /** EP02: in-app access request (no reference codes, no command line). */
+  onRequestAccess?: (message: string) => Promise<void>;
 }
 
 function Shell({
@@ -51,7 +53,7 @@ function Shell({
         )}
       </div>
       {eyebrow ? <p className="f-eyebrow">{eyebrow}</p> : null}
-      <h1 className="auth-card__title">{title}</h1>
+      <h1 className="auth-card__title f-name">{title}</h1>
       {children}
     </section>
   );
@@ -104,6 +106,67 @@ function formatWait(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')} นาที`;
 }
 
+const ACCOUNT_TEXT = {
+  new: {
+    expression: 'default',
+    eyebrow: 'ขอสิทธิ์ใช้งาน',
+    title: 'ยินดีต้อนรับสู่ FLOW ค่ะ',
+    body: 'บัญชี LINE ของคุณยืนยันตัวตนแล้ว ส่งคำขอใช้งานได้จากหน้านี้เลย เจ้าของระบบจะตรวจสอบและอนุมัติในแอป',
+  },
+  pending: {
+    expression: 'thoughtful',
+    eyebrow: 'รอการอนุมัติ',
+    title: 'ส่งคำขอใช้งานแล้วค่ะ',
+    body: 'เจ้าของระบบจะเห็นคำขอของคุณในแอปทันที เมื่ออนุมัติแล้ว กด “ตรวจสอบอีกครั้ง” ได้เลย ไม่ต้องเข้าสู่ระบบใหม่',
+  },
+  rejected: {
+    expression: 'empty',
+    eyebrow: 'ยังไม่ได้รับอนุมัติ',
+    title: 'คำขอครั้งก่อนยังไม่ได้รับอนุมัติ',
+    body: 'หากต้องการใช้งาน ส่งคำขอใหม่พร้อมข้อความสั้น ๆ ถึงเจ้าของระบบได้ค่ะ',
+  },
+  suspended: {
+    expression: 'error',
+    eyebrow: 'ระงับการใช้งานชั่วคราว',
+    title: 'บัญชีนี้ถูกระงับการใช้งานชั่วคราว',
+    body: 'ข้อมูลของคุณยังอยู่ครบ กรุณาติดต่อเจ้าของระบบเพื่อเปิดใช้งานอีกครั้งค่ะ',
+  },
+} as const;
+
+function AccessRequestForm({ onSubmit }: { onSubmit: (message: string) => Promise<void> }) {
+  const [message, setMessage] = useState('');
+  const [state, setState] = useState<'idle' | 'sending' | 'error'>('idle');
+  return (
+    <form
+      className="auth-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (state === 'sending') return;
+        setState('sending');
+        onSubmit(message.trim()).catch(() => setState('error'));
+      }}
+    >
+      <label className="f-field">
+        <span className="f-label">ข้อความถึงเจ้าของระบบ (ไม่บังคับ)</span>
+        <textarea
+          className="f-textarea"
+          maxLength={200}
+          rows={2}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="เช่น ชื่อเล่น หรือกลุ่มที่ต้องการเข้าร่วม"
+        />
+      </label>
+      {state === 'error' ? (
+        <Notice tone="caution">ส่งคำขอไม่สำเร็จ ตรวจสอบการเชื่อมต่อแล้วลองใหม่อีกครั้งค่ะ</Notice>
+      ) : null}
+      <Button type="submit" variant="dark" busy={state === 'sending'}>
+        ส่งคำขอใช้งาน
+      </Button>
+    </form>
+  );
+}
+
 /** K — HTTP 429: explains the pause, counts down to the server's Retry-After, no auto retry. */
 function RateLimited({
   retryAt,
@@ -145,7 +208,10 @@ function RateLimited({
 }
 
 const UNAVAILABLE_TEXT: Record<UnavailableCause, { title: string; body: string }> = {
-  network: { title: 'เชื่อมต่อไม่ได้ในขณะนี้', body: 'กรุณาตรวจสอบอินเทอร์เน็ต แล้วลองใหม่อีกครั้งนะคะ' },
+  network: {
+    title: 'เชื่อมต่อไม่ได้ในขณะนี้',
+    body: 'กรุณาตรวจสอบอินเทอร์เน็ต แล้วลองใหม่อีกครั้งนะคะ',
+  },
   line: {
     title: 'ยังติดต่อ LINE ไม่ได้ค่ะ',
     body: 'บริการของ LINE อาจไม่พร้อมชั่วคราว หรือควรเปิด FLOW จากแอป LINE อีกครั้ง',
@@ -164,7 +230,7 @@ const UNAVAILABLE_TEXT: Record<UnavailableCause, { title: string; body: string }
   },
 };
 
-function LineStatusPanel({ check }: { check: () => Promise<LineStatus> }) {
+export function LineStatusPanel({ check }: { check: () => Promise<LineStatus> }) {
   const [state, setState] = useState<
     { kind: 'idle' } | { kind: 'loading' } | { kind: 'ok'; s: LineStatus } | { kind: 'error' }
   >({ kind: 'idle' });
@@ -217,7 +283,7 @@ function LineStatusPanel({ check }: { check: () => Promise<LineStatus> }) {
       >
         ตรวจสอบการเชื่อมต่อ LINE (อ่านอย่างเดียว)
       </Button>
-      <p className="f-hint">ไม่มีการส่งข้อความ LINE ใด ๆ ใน EP01</p>
+      <p className="f-hint">อ่านข้อมูลอย่างเดียว — ไม่มีการส่งข้อความ LINE ใด ๆ</p>
     </div>
   );
 }
@@ -268,49 +334,46 @@ export function AuthScreen({
         </Shell>
       );
     case 'approved': {
-      // D
+      // D — the application replaces this card (AuthApp); kept for the states gallery.
       const exp = new Date(view.expiresAt);
-      const roleTh = view.user.role === 'owner' ? 'เจ้าของระบบ (ช่วงพัฒนา)' : 'ผู้ทดสอบ (ช่วงพัฒนา)';
       return (
         <Shell
           expression="happy"
-          eyebrow="EP01 · Foundation"
-          title={`ยินดีต้อนรับค่ะ${view.user.displayName ? ` คุณ${view.user.displayName}` : ''}`}
+          eyebrow="พร้อมใช้งาน"
+          title={`ยินดีต้อนรับค่ะ คุณ${view.user.displayName}`}
         >
           <p className="auth-role">
-            <ShieldCheck aria-hidden className="inline-icon" /> {roleTh}
+            <ShieldCheck aria-hidden className="inline-icon" /> เข้าสู่ระบบแล้ว
           </p>
-          <Notice tone="info">
-            นี่คือหน้าทดสอบการเข้าสู่ระบบของ EP01 — ปฏิทินและการสร้างนัดหมายจริงจะเปิดใช้ใน EP02 ยังไม่มีข้อมูลนัดหมายใด
-            ๆ
-          </Notice>
           <p className="f-hint f-num">
             เซสชันหมดอายุ {formatThaiDate(exp, TZ).short} {formatThaiTime(exp, TZ)}
           </p>
-          {view.user.role === 'owner' && actions.onCheckLine ? (
-            <LineStatusPanel check={actions.onCheckLine} />
+        </Shell>
+      );
+    }
+    case 'account': {
+      // E — EP02: signed in, waiting for (or blocked from) access. No reference codes.
+      const t = ACCOUNT_TEXT[view.account];
+      return (
+        <Shell expression={t.expression} eyebrow={t.eyebrow} title={t.title}>
+          <p className="auth-who f-name">
+            <ShieldCheck aria-hidden className="inline-icon" /> {view.user.displayName}
+          </p>
+          <p className="f-muted">{t.body}</p>
+          {(view.account === 'new' || view.account === 'rejected') && actions.onRequestAccess ? (
+            <AccessRequestForm onSubmit={actions.onRequestAccess} />
           ) : null}
-          <Button icon={LogOut} onClick={actions.onLogout}>
+          {view.account === 'pending' ? (
+            <RetryButton variant="dark" onRetry={actions.onRetry}>
+              ตรวจสอบอีกครั้ง
+            </RetryButton>
+          ) : null}
+          <Button variant="ghost" size="sm" icon={LogOut} onClick={actions.onLogout}>
             ออกจากระบบ
           </Button>
         </Shell>
       );
     }
-    case 'not-approved': // E
-      return (
-        <Shell expression="thoughtful" eyebrow="รอการอนุมัติ" title="บัญชีนี้ยังไม่ได้รับสิทธิ์ใช้งาน FLOW">
-          <p className="f-muted">
-            FLOW เปิดให้เฉพาะผู้ที่ได้รับอนุญาตในช่วงพัฒนา หากต้องการใช้งาน กรุณาแจ้งรหัสนี้ให้เจ้าของระบบค่ะ
-          </p>
-          {view.enrollmentRef ? (
-            <p className="auth-ref" aria-label={`รหัสอ้างอิง ${view.enrollmentRef}`}>
-              {view.enrollmentRef}
-            </p>
-          ) : null}
-          <p className="f-hint">รหัสใช้ได้ 15 นาที · เจ้าของระบบอนุมัติได้จากเครื่องของตนเองเท่านั้น</p>
-          <RetryButton onRetry={actions.onRetry}>ได้รับอนุมัติแล้ว ลองอีกครั้ง</RetryButton>
-        </Shell>
-      );
     case 'denied': // F
       return (
         <Shell expression="error" eyebrow="ไม่มีสิทธิ์เข้าถึง" title="สิทธิ์การใช้งานของบัญชีนี้ถูกยกเลิกแล้ว">

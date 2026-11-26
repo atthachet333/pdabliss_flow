@@ -4,7 +4,7 @@
  * the dev gateway. No LIFF, no network.
  */
 import { AuthScreen } from '../auth/AuthScreen';
-import type { AuthView, LineStatus } from '../auth/types';
+import type { AuthView, LineStatus, SessionUser } from '../auth/types';
 import { brandArt } from '../brand/assets';
 
 export const AUTH_STATES_MARKER = 'FLOW_AUTH_STATES_DEV_ONLY';
@@ -21,29 +21,49 @@ const SIM_STATUS: LineStatus = {
 const SIM_NOW = Date.UTC(2026, 10, 26, 4, 0, 0);
 const simNow = () => SIM_NOW;
 
+/** Synthetic identities only (no real LINE data). Long emoji name exercises F08 wrapping. */
+const SIM_OWNER: SessionUser = {
+  id: '00000000-0000-4000-8000-000000000001',
+  displayName: 'ผู้ทดสอบจำลอง',
+  status: 'ACTIVE',
+  globalRole: 'OWNER',
+};
+const SIM_NEW: SessionUser = {
+  id: '00000000-0000-4000-8000-000000000002',
+  displayName: 'คุณสมศรี มีความสุขมากมาย 🌸✨🎉 (บัญชีจำลอง)',
+  status: 'NEW',
+  globalRole: 'USER',
+};
+
 const STATES: { id: string; label: string; view: AuthView }[] = [
   { id: 'A', label: 'A · เริ่มต้น', view: { kind: 'initializing' } },
   { id: 'B', label: 'B · ยืนยันตัวตนกับ LINE', view: { kind: 'authenticating' } },
   { id: 'C', label: 'C · ต้องเข้าสู่ระบบ', view: { kind: 'login-required' } },
   {
     id: 'D',
-    label: 'D · เจ้าของระบบ (จำลอง)',
-    view: {
-      kind: 'approved',
-      user: { displayName: 'ผู้ทดสอบจำลอง', role: 'owner' },
-      expiresAt: '2026-11-26T12:00:00.000Z',
-    },
+    label: 'D · เข้าสู่ระบบแล้ว (จำลอง)',
+    view: { kind: 'approved', user: SIM_OWNER, expiresAt: '2026-11-26T12:00:00.000Z' },
   },
   {
-    id: 'D2',
-    label: 'D · ผู้ทดสอบ (จำลอง)',
-    view: {
-      kind: 'approved',
-      user: { displayName: null, role: 'tester' },
-      expiresAt: '2026-11-26T12:00:00.000Z',
-    },
+    id: 'E1',
+    label: 'E · ผู้ใช้ใหม่ ขอสิทธิ์ในแอป',
+    view: { kind: 'account', account: 'new', user: SIM_NEW },
   },
-  { id: 'E', label: 'E · รอการอนุมัติ', view: { kind: 'not-approved', enrollmentRef: 'SIM0-0000' } },
+  {
+    id: 'E2',
+    label: 'E · รอการอนุมัติ',
+    view: { kind: 'account', account: 'pending', user: SIM_NEW },
+  },
+  {
+    id: 'E3',
+    label: 'E · ไม่อนุมัติ',
+    view: { kind: 'account', account: 'rejected', user: SIM_NEW },
+  },
+  {
+    id: 'E4',
+    label: 'E · ระงับชั่วคราว',
+    view: { kind: 'account', account: 'suspended', user: SIM_NEW },
+  },
   { id: 'F', label: 'F · ไม่มีสิทธิ์', view: { kind: 'denied', reason: 'revoked' } },
   { id: 'G', label: 'G · เซสชันหมดอายุ', view: { kind: 'expired', inClient: false } },
   { id: 'H', label: 'H · เครือข่ายขัดข้อง', view: { kind: 'unavailable', cause: 'network' } },
@@ -87,6 +107,7 @@ export default function AuthStatesShowcase() {
                     onRetry: noop,
                     onLogout: noop,
                     onCheckLine: async () => SIM_STATUS,
+                    onRequestAccess: async () => undefined,
                   }}
                 />
               </div>

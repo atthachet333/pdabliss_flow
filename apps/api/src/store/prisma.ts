@@ -16,6 +16,7 @@ import {
   type Session as PSession,
 } from '../generated/prisma/client.js';
 import { type DbPurpose, assertDatabaseTarget } from '../db/guard.js';
+import { assertFailClosedWhere } from './fail-closed.js';
 import {
   type AccessRequestRow,
   type AppointmentBundle,
@@ -33,6 +34,7 @@ import {
   type SessionRow,
   type Store,
   StoreConflictError,
+  StoreTransactionConflictError,
   type UserRow,
   type WebhookEventRow,
   type WorkspaceRow,
@@ -99,7 +101,9 @@ const bundleInclude = {
   reminderRules: { orderBy: { position: 'asc' as const } },
 } satisfies Prisma.AppointmentInclude;
 
-function mapBundle(a: Prisma.AppointmentGetPayload<{ include: typeof bundleInclude }>): AppointmentBundle {
+function mapBundle(
+  a: Prisma.AppointmentGetPayload<{ include: typeof bundleInclude }>,
+): AppointmentBundle {
   return {
     appointment: mapAppointment(a),
     accessGrants: a.accessGrants,
@@ -128,7 +132,18 @@ export function createPrismaClient(url: string | undefined, purpose: DbPurpose):
     acquireTimeout: 10000,
     initSql: "SET time_zone = '+00:00'",
   });
-  return new PrismaClient({ adapter });
+  // Every model operation is checked: a `where` containing an explicit undefined (which Prisma
+  // would silently drop, matching every row) is refused before reaching MariaDB.
+  return new PrismaClient({ adapter }).$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ model, operation, args, query }) {
+          assertFailClosedWhere(model, operation, args);
+          return query(args);
+        },
+      },
+    },
+  }) as unknown as PrismaClient;
 }
 
 export class PrismaStore implements Store {
@@ -140,10 +155,37 @@ export class PrismaStore implements Store {
 
   async transaction<T>(fn: (tx: Store) => Promise<T>): Promise<T> {
     if (this.nested) return fn(this);
-    return this.root.$transaction((tx) => fn(new PrismaStore(this.root, tx, true)), {
-      maxWait: 5000,
-      timeout: 15000,
-    });
+    try {
+      return await this.root.$transaction((tx) => fn(new PrismaStore(this.root, tx, true)), {
+        maxWait: 5000,
+        timeout: 15000,
+      });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError) {
+        const adapter = err.meta?.driverAdapterError as
+          { cause?: { originalCode?: string } } | undefined;
+        // MariaDB ER_CHECKREAD (1020) is exposed by Prisma as a generic external error.
+        if (
+          err.code === 'P2034' ||
+          (err.code === 'P2039' && adapter?.cause?.originalCode === '1020')
+        )
+          throw new StoreTransactionConflictError();
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Start-up check: the live connection must be the expected database with a UTC session.
+   * Throws (server refuses to start) instead of running against anything else.
+   */
+  async verifyConnection(expectedDatabase: string): Promise<void> {
+    const [row] = await this.root.$queryRawUnsafe<{ db: string | null; tz: string }[]>(
+      'SELECT DATABASE() AS db, @@session.time_zone AS tz',
+    );
+    if (row?.db !== expectedDatabase)
+      throw new Error(`Connected database is not ${expectedDatabase}`);
+    if (row.tz !== '+00:00') throw new Error('Database session time zone is not UTC');
   }
 
   async close(): Promise<void> {
@@ -152,6 +194,8 @@ export class PrismaStore implements Store {
 
   /** The one and only appointment visibility predicate (see docs/EP02-PERMISSION-MATRIX.md). */
   private visibleWhere(viewerUserId: string, workspaceIds: string[]): Prisma.AppointmentWhereInput {
+    if (!viewerUserId || !Array.isArray(workspaceIds))
+      throw new Error('visibleWhere requires a viewer and workspace scope');
     return {
       workspaceId: { in: workspaceIds },
       OR: [
@@ -164,7 +208,10 @@ export class PrismaStore implements Store {
 
   // ───────── users & identities
   async findIdentityByLineUserId(lineUserId: string) {
-    const i = await this.db.lineIdentity.findUnique({ where: { lineUserId }, include: { user: true } });
+    const i = await this.db.lineIdentity.findUnique({
+      where: { lineUserId },
+      include: { user: true },
+    });
     if (!i) return null;
     const { user, ...identity } = i;
     return { identity, user };
@@ -188,16 +235,30 @@ export class PrismaStore implements Store {
   }
   async updateUser(
     id: string,
-    patch: Partial<Pick<UserRow, 'displayName' | 'status' | 'globalRole' | 'lastLoginAt' | 'statusChangedAt'>>,
+    patch: Partial<
+      Pick<UserRow, 'displayName' | 'status' | 'globalRole' | 'lastLoginAt' | 'statusChangedAt'>
+    >,
     opts: { now: Date; expectAuthzVersion?: number; bumpAuthz?: boolean },
   ) {
     const n = await this.db.user.updateMany({
-      where: { id, ...(opts.expectAuthzVersion !== undefined ? { authzVersion: opts.expectAuthzVersion } : {}) },
-      data: { ...patch, updatedAt: opts.now, ...(opts.bumpAuthz ? { authzVersion: { increment: 1 } } : {}) },
+      where: {
+        id,
+        ...(opts.expectAuthzVersion !== undefined ? { authzVersion: opts.expectAuthzVersion } : {}),
+      },
+      data: {
+        ...patch,
+        updatedAt: opts.now,
+        ...(opts.bumpAuthz ? { authzVersion: { increment: 1 } } : {}),
+      },
     });
     return n.count === 1 ? this.getUser(id) : null;
   }
-  async listUsers(q: { statuses?: UserRow['status'][]; text?: string; limit: number; offset?: number }) {
+  async listUsers(q: {
+    statuses?: UserRow['status'][];
+    text?: string;
+    limit: number;
+    offset?: number;
+  }) {
     return this.db.user.findMany({
       where: {
         ...(q.statuses ? { status: { in: q.statuses } } : {}),
@@ -275,6 +336,10 @@ export class PrismaStore implements Store {
   async purgeWebhookEvents(now: Date) {
     return (await this.db.webhookEvent.deleteMany({ where: { expiresAt: { lte: now } } })).count;
   }
+  async purgeIdempotency(now: Date) {
+    return (await this.db.idempotencyRecord.deleteMany({ where: { expiresAt: { lte: now } } }))
+      .count;
+  }
 
   // ───────── access requests
   async createAccessRequest(row: AccessRequestRow) {
@@ -288,9 +353,16 @@ export class PrismaStore implements Store {
     return this.db.accessRequest.findUnique({ where: { id }, omit: { openKey: true } });
   }
   async getOpenAccessRequest(userId: string) {
-    return this.db.accessRequest.findUnique({ where: { openKey: userId }, omit: { openKey: true } });
+    return this.db.accessRequest.findUnique({
+      where: { openKey: userId },
+      omit: { openKey: true },
+    });
   }
-  async listAccessRequests(q: { statuses?: AccessRequestRow['status'][]; userId?: string; limit: number }) {
+  async listAccessRequests(q: {
+    statuses?: AccessRequestRow['status'][];
+    userId?: string;
+    limit: number;
+  }) {
     return this.db.accessRequest.findMany({
       where: {
         ...(q.statuses ? { status: { in: q.statuses } } : {}),
@@ -389,12 +461,19 @@ export class PrismaStore implements Store {
       this.db.workspaceMember.upsert({
         where: { workspaceId_userId: { workspaceId: row.workspaceId, userId: row.userId } },
         create: row,
-        update: { role: row.role, status: row.status, updatedAt: row.updatedAt, addedByUserId: row.addedByUserId },
+        update: {
+          role: row.role,
+          status: row.status,
+          updatedAt: row.updatedAt,
+          addedByUserId: row.addedByUserId,
+        },
       }),
     );
   }
   async getMember(workspaceId: string, userId: string) {
-    return this.db.workspaceMember.findUnique({ where: { workspaceId_userId: { workspaceId, userId } } });
+    return this.db.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId } },
+    });
   }
   async listMembers(workspaceId: string, statuses?: MemberRow['status'][]) {
     return this.db.workspaceMember.findMany({
@@ -436,10 +515,15 @@ export class PrismaStore implements Store {
   }
   async updateDestination(
     id: string,
-    patch: Partial<Pick<DestinationRow, 'label' | 'status' | 'workspaceId' | 'audienceSize' | 'lastEventAt'>>,
+    patch: Partial<
+      Pick<DestinationRow, 'label' | 'status' | 'workspaceId' | 'audienceSize' | 'lastEventAt'>
+    >,
     now: Date,
   ) {
-    const n = await this.db.lineDestination.updateMany({ where: { id }, data: { ...patch, updatedAt: now } });
+    const n = await this.db.lineDestination.updateMany({
+      where: { id },
+      data: { ...patch, updatedAt: now },
+    });
     return n.count === 1 ? this.getDestination(id) : null;
   }
   async listDestinations(q: {
@@ -480,15 +564,18 @@ export class PrismaStore implements Store {
   private async replaceChildren(id: string, b: Partial<Omit<AppointmentBundle, 'appointment'>>) {
     if (b.accessGrants) {
       await this.db.appointmentAccess.deleteMany({ where: { appointmentId: id } });
-      if (b.accessGrants.length) await guarded(this.db.appointmentAccess.createMany({ data: b.accessGrants }));
+      if (b.accessGrants.length)
+        await guarded(this.db.appointmentAccess.createMany({ data: b.accessGrants }));
     }
     if (b.destinations) {
       await this.db.appointmentDestination.deleteMany({ where: { appointmentId: id } });
-      if (b.destinations.length) await guarded(this.db.appointmentDestination.createMany({ data: b.destinations }));
+      if (b.destinations.length)
+        await guarded(this.db.appointmentDestination.createMany({ data: b.destinations }));
     }
     if (b.reminderRules) {
       await this.db.reminderRule.deleteMany({ where: { appointmentId: id } });
-      if (b.reminderRules.length) await guarded(this.db.reminderRule.createMany({ data: b.reminderRules }));
+      if (b.reminderRules.length)
+        await guarded(this.db.reminderRule.createMany({ data: b.reminderRules }));
     }
   }
   async createAppointment(b: AppointmentBundle) {
@@ -524,7 +611,8 @@ export class PrismaStore implements Store {
     if (q.to) and.push({ startDate: { lte: toDate(q.to) } });
     if (q.statuses) and.push({ status: { in: q.statuses } });
     if (q.categories) and.push({ category: { in: q.categories } });
-    if (q.text) and.push({ OR: [{ title: { contains: q.text } }, { location: { contains: q.text } }] });
+    if (q.text)
+      and.push({ OR: [{ title: { contains: q.text } }, { location: { contains: q.text } }] });
     const dir = q.order === 'desc' ? 'desc' : 'asc';
     const rows = await this.db.appointment.findMany({
       where: { AND: and },
@@ -536,7 +624,10 @@ export class PrismaStore implements Store {
   }
   async getAppointmentBundles(ids: string[]) {
     if (!ids.length) return [];
-    const rows = await this.db.appointment.findMany({ where: { id: { in: ids } }, include: bundleInclude });
+    const rows = await this.db.appointment.findMany({
+      where: { id: { in: ids } },
+      include: bundleInclude,
+    });
     const byId = new Map(rows.map((r) => [r.id, mapBundle(r)]));
     return ids.map((id) => byId.get(id)).filter((b): b is AppointmentBundle => !!b);
   }
@@ -556,7 +647,9 @@ export class PrismaStore implements Store {
 
   // ───────── idempotency
   async getIdempotency(userId: string, scope: string, key: string) {
-    return this.db.idempotencyRecord.findUnique({ where: { userId_scope_key: { userId, scope, key } } });
+    return this.db.idempotencyRecord.findUnique({
+      where: { userId_scope_key: { userId, scope, key } },
+    });
   }
   async createIdempotency(row: IdempotencyRow) {
     await guarded(this.db.idempotencyRecord.create({ data: row }));
@@ -575,7 +668,11 @@ export class PrismaStore implements Store {
           ? Prisma.DbNull
           : (row.defaultReminders as Prisma.InputJsonValue),
     };
-    await this.db.userPreference.upsert({ where: { userId: row.userId }, create: data, update: data });
+    await this.db.userPreference.upsert({
+      where: { userId: row.userId },
+      create: data,
+      update: data,
+    });
   }
 
   // ───────── audit
@@ -587,7 +684,12 @@ export class PrismaStore implements Store {
       },
     });
   }
-  async listAudit(q: { workspaceId?: string; resourceTypes?: string[]; limit: number; offset?: number }) {
+  async listAudit(q: {
+    workspaceId?: string;
+    resourceTypes?: string[];
+    limit: number;
+    offset?: number;
+  }) {
     const rows = await this.db.auditLog.findMany({
       where: {
         ...(q.workspaceId ? { workspaceId: q.workspaceId } : {}),

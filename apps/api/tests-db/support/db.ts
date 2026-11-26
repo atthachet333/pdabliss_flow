@@ -39,7 +39,7 @@ const TABLES = [
   'users',
 ] as const;
 
-function testUrl(): string | undefined {
+export function testUrl(): string | undefined {
   if (process.env.TEST_DATABASE_URL) return process.env.TEST_DATABASE_URL;
   const dir = process.env.FLOW_SECRET_DIR || join(homedir(), '.pdabliss', 'flow');
   const p = join(dir, 'test.env');
@@ -47,6 +47,17 @@ function testUrl(): string | undefined {
 }
 
 let shared: { client: ReturnType<typeof createPrismaClient>; checked: boolean } | null = null;
+
+export async function openTestStore(): Promise<PrismaStore> {
+  const store = new PrismaStore(createPrismaClient(testUrl(), 'test'));
+  try {
+    await store.verifyConnection(DB_NAMES.test);
+    return store;
+  } catch (error) {
+    await store.close();
+    throw error;
+  }
+}
 
 export async function testStore(): Promise<Store> {
   const url = testUrl();
@@ -61,11 +72,14 @@ export async function testStore(): Promise<Store> {
   const c = shared.client;
   if (!shared.checked) {
     const [row] = await c.$queryRawUnsafe<{ db: string }[]>('SELECT DATABASE() AS db');
-    if (row?.db !== DB_NAMES.test) throw new Error(`Refusing to reset: connected database is not ${DB_NAMES.test}`);
+    if (row?.db !== DB_NAMES.test)
+      throw new Error(`Refusing to reset: connected database is not ${DB_NAMES.test}`);
     const tables = await c.$queryRawUnsafe<{ t: string }[]>(
       "SELECT TABLE_NAME AS t FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME <> '_prisma_migrations'",
     );
-    const missing = tables.map((x) => x.t).filter((t) => !(TABLES as readonly string[]).includes(t));
+    const missing = tables
+      .map((x) => x.t)
+      .filter((t) => !(TABLES as readonly string[]).includes(t));
     if (missing.length) throw new Error(`Reset list is missing tables: ${missing.join(', ')}`);
     shared.checked = true;
   }

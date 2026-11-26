@@ -45,11 +45,7 @@ export const CALENDAR_PRESETS = [
 export type ReminderRuleKind = 'RELATIVE' | 'CALENDAR';
 export type ReminderRuleStatus = 'SCHEDULED' | 'PAST' | 'DISABLED' | 'DUPLICATE' | 'CANCELLED';
 export type ReminderRuleIssue =
-  | 'invalid-offset'
-  | 'invalid-day-offset'
-  | 'invalid-time'
-  | 'after-start'
-  | 'too-many';
+  'invalid-offset' | 'invalid-day-offset' | 'invalid-time' | 'after-start' | 'too-many';
 
 export interface ReminderRuleInput {
   kind: ReminderRuleKind;
@@ -90,7 +86,11 @@ export interface ReminderCalculation {
 }
 
 export function appointmentAnchor(t: AppointmentTiming): Date {
-  return zonedLocalToUtc(t.localDate, t.allDay ? ALL_DAY_ANCHOR : (t.localTime ?? '00:00'), t.timeZone);
+  return zonedLocalToUtc(
+    t.localDate,
+    t.allDay ? ALL_DAY_ANCHOR : (t.localTime ?? '00:00'),
+    t.timeZone,
+  );
 }
 
 export function reminderLabelTh(rule: ReminderRuleInput): string {
@@ -115,7 +115,8 @@ function validate(rule: ReminderRuleInput): ReminderRuleIssue | null {
   const d = rule.dayOffset;
   if (typeof d !== 'number' || !Number.isInteger(d) || d > 0 || d < MIN_CALENDAR_DAY_OFFSET)
     return 'invalid-day-offset';
-  if (typeof rule.localTime !== 'string' || !isValidLocalTime(rule.localTime)) return 'invalid-time';
+  if (typeof rule.localTime !== 'string' || !isValidLocalTime(rule.localTime))
+    return 'invalid-time';
   return null;
 }
 

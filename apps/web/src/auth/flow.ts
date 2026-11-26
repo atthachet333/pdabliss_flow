@@ -1,5 +1,6 @@
 /**
- * EP01 authentication controller (framework-free, unit-tested).
+ * Authentication controller (framework-free, unit-tested). EP01 contract; EP02 adds the
+ * account states (new / pending / rejected / suspended) — every verified user has a session.
  *
  * Sequence (per LINE LIFF guidance):
  *  1. Ask the API whether auth is configured and which LIFF ID to use (non-secret).
@@ -26,6 +27,7 @@ import {
   DEFAULT_RETRY_AFTER_SECONDS,
   type AuthView,
   type LiffPort,
+  type SignedIn,
   type UnavailableCause,
 } from './types';
 
@@ -189,11 +191,9 @@ export class AuthController {
     } catch (err) {
       return this.fail(err);
     }
-    if (session.state === 'approved') {
-      this.deps.guard.reset();
-      return this.set({ kind: 'approved', user: session.user, expiresAt: session.expiresAt });
-    }
-    if (session.state === 'revoked') return this.set({ kind: 'denied', reason: 'revoked' });
+    if ('user' in session) return this.signedIn(session);
+    // A session ended by the server (rotation, suspension, revocation) is not a verdict on the
+    // account: fall through to a fresh LINE exchange, which returns the current account state.
 
     if (!liff.isLoggedIn()) {
       if (liff.isInClient()) return this.unavailable('line');
@@ -220,14 +220,8 @@ export class AuthController {
     } catch (err) {
       return this.fail(err);
     }
+    if ('user' in result) return this.signedIn(result);
     switch (result.state) {
-      case 'approved':
-        this.deps.guard.reset();
-        return this.set({ kind: 'approved', user: result.user, expiresAt: result.expiresAt });
-      case 'not-approved':
-        return this.set({ kind: 'not-approved', enrollmentRef: result.enrollmentRef });
-      case 'revoked':
-        return this.set({ kind: 'denied', reason: 'revoked' });
       case 'token-expired':
         return this.relogin();
       case 'token-invalid':
@@ -236,6 +230,33 @@ export class AuthController {
       case 'rate-limited':
         return this.rateLimited(result.retryAfterSeconds);
     }
+  }
+
+  /** A live session: the application (approved) or the matching account screen. */
+  private signedIn(s: SignedIn): void {
+    this.deps.guard.reset();
+    if (s.state === 'approved')
+      return this.set({ kind: 'approved', user: s.user, expiresAt: s.expiresAt });
+    if (s.state === 'account-revoked') return this.set({ kind: 'denied', reason: 'revoked' });
+    return this.set({ kind: 'account', account: s.state, user: s.user });
+  }
+
+  /** Re-reads the session (e.g. after an access request or an invitation). One flight. */
+  refresh(): Promise<void> {
+    return this.single(async () => {
+      let session;
+      try {
+        session = await this.deps.api.getSession();
+      } catch (err) {
+        return this.fail(err);
+      }
+      if ('user' in session) return this.signedIn(session);
+      return this.set(
+        session.state === 'expired'
+          ? { kind: 'expired', inClient: this.liff?.isInClient() ?? false }
+          : { kind: 'login-required' },
+      );
+    });
   }
 
   /** Expired/missing token. LIFF browser: user reopens FLOW. External browser: guarded login. */

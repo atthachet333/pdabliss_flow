@@ -6,7 +6,7 @@
 LINE app ──(Rich menu / Flex buttons)──► LIFF web app (apps/web, React+Vite)
    ▲                                          │ HTTPS + LINE ID token (EP01)
    │ push (Messaging API)                     ▼
-   │                                     API (apps/api, Fastify) ──► PostgreSQL (EP03)
+   │                                     API (apps/api, Fastify) ──► MariaDB (EP02, Prisma)
    │                                          ▲                          ▲
    └──────── worker (apps/worker) ────────────┴── claims due jobs ───────┘ (EP04)
 LINE Platform ──(webhooks: join/leave/postback, signed)──► API

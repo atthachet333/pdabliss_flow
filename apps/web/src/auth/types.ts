@@ -1,16 +1,24 @@
-/** EP01 authentication view model — every screen the user can see (A–K). */
+/** Authentication view model — every screen the user can see (EP01 A–K, EP02 account states). */
 export type UnavailableCause = 'network' | 'line' | 'server' | 'config' | 'login-loop';
+
+export type GlobalRole = 'OWNER' | 'ADMIN' | 'USER';
+export type AccountStatus = 'NEW' | 'PENDING' | 'ACTIVE' | 'REJECTED' | 'SUSPENDED' | 'REVOKED';
+/** Verified user with a FLOW session (any status). Never contains a LINE user id. */
+export interface SessionUser {
+  id: string;
+  displayName: string;
+  status: AccountStatus;
+  globalRole: GlobalRole;
+}
+/** Signed-in, but not (or no longer) allowed to use the application. */
+export type LimitedAccount = 'new' | 'pending' | 'rejected' | 'suspended';
 
 export type AuthView =
   | { kind: 'initializing' } // A
   | { kind: 'authenticating' } // B
   | { kind: 'login-required' } // C
-  | {
-      kind: 'approved';
-      user: { displayName: string | null; role: 'owner' | 'tester' };
-      expiresAt: string;
-    } // D
-  | { kind: 'not-approved'; enrollmentRef: string | null } // E
+  | { kind: 'approved'; user: SessionUser; expiresAt: string } // D → the application
+  | { kind: 'account'; account: LimitedAccount; user: SessionUser } // E (EP02: in-app request)
   | { kind: 'denied'; reason: 'revoked' } // F
   | { kind: 'expired'; inClient: boolean } // G
   | { kind: 'unavailable'; cause: UnavailableCause } // H
@@ -19,22 +27,17 @@ export type AuthView =
   /** K: the server answered 429. `retryAt` = epoch ms when a retry is permitted. */
   | { kind: 'rate-limited'; retryAt: number };
 
-export type SessionResult =
-  | {
-      state: 'approved';
-      user: { displayName: string | null; role: 'owner' | 'tester' };
-      expiresAt: string;
-    }
-  | { state: 'unauthenticated' | 'expired' | 'revoked' };
+/** A live FLOW session; `state` is the account state (only "approved" may use the app). */
+export type SignedIn = {
+  state: 'approved' | LimitedAccount | 'account-revoked';
+  user: SessionUser;
+  expiresAt: string;
+};
+
+export type SessionResult = SignedIn | { state: 'unauthenticated' | 'expired' | 'revoked' };
 
 export type ExchangeResult =
-  | {
-      state: 'approved';
-      user: { displayName: string | null; role: 'owner' | 'tester' };
-      expiresAt: string;
-    }
-  | { state: 'not-approved'; enrollmentRef: string | null }
-  | { state: 'revoked' }
+  | SignedIn
   | { state: 'token-expired' }
   | { state: 'token-invalid' }
   | { state: 'line-unavailable' }

@@ -1,7 +1,8 @@
 import { lazy, Suspense } from 'react';
-import { Link, Route, Routes } from 'react-router';
+import { Link, Route, Routes, useLocation } from 'react-router';
 import { AuthLayout } from './auth/AuthScreen';
 import { SallyImage, Skeleton } from './components/ui';
+import { isAppRoute } from './routes';
 
 /**
  * Dev-only pages (design showcase, EP01 auth-state gallery) exist only in development
@@ -13,17 +14,6 @@ const DEV_PAGES = import.meta.env.DEV || import.meta.env.MODE === 'showcase';
 const DesignShowcase = DEV_PAGES ? lazy(() => import('./showcase/DesignShowcase')) : null;
 const AuthStatesShowcase = DEV_PAGES ? lazy(() => import('./showcase/AuthStatesShowcase')) : null;
 const AuthApp = lazy(() => import('./auth/AuthApp'));
-
-/** LIFF endpoint and rich-menu deep links (must match the gateway allow-list). */
-const APP_ROUTES = [
-  '/',
-  '/today',
-  '/calendar',
-  '/appointments/new',
-  '/groups',
-  '/history',
-  '/settings',
-];
 
 function NotFound() {
   return (
@@ -58,20 +48,25 @@ function AuthFallback() {
   );
 }
 
+/**
+ * One AuthApp instance for every application path, so navigating inside the app never
+ * re-runs login. Paths outside the allow-list get the not-found page (as the gateway does).
+ */
+function Application() {
+  const { pathname } = useLocation();
+  // After the invitation page strips its token the router still holds the old path; any path
+  // that started as an app path stays inside the app.
+  if (!isAppRoute(pathname) && !pathname.startsWith('/invite/')) return <NotFound />;
+  return (
+    <Suspense fallback={<AuthFallback />}>
+      <AuthApp />
+    </Suspense>
+  );
+}
+
 export function App() {
   return (
     <Routes>
-      {APP_ROUTES.map((path) => (
-        <Route
-          key={path}
-          path={path}
-          element={
-            <Suspense fallback={<AuthFallback />}>
-              <AuthApp />
-            </Suspense>
-          }
-        />
-      ))}
       {DesignShowcase ? (
         <Route
           path="/dev/design-showcase"
@@ -92,7 +87,7 @@ export function App() {
           }
         />
       ) : null}
-      <Route path="*" element={<NotFound />} />
+      <Route path="*" element={<Application />} />
     </Routes>
   );
 }

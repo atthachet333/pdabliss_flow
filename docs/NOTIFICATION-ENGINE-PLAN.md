@@ -11,7 +11,7 @@ future, otherwise "past" · R6 all-day anchors at 08:00 local · R7 sorted earli
 
 ## 2. Architecture
 
-- PostgreSQL-backed `notification_job` rows, one per (reminder × destination × appointment
+- MariaDB-backed (EP02 decision) `notification_job` rows, one per (reminder × destination × appointment
   revision). No Redis unless load justifies it later.
 - The worker polls every 15 s:
   `UPDATE … SET state='processing', lease_until=now()+60s, worker_id=$1 WHERE id IN (SELECT id

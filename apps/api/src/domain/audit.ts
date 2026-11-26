@@ -27,7 +27,9 @@ const ALLOWED_META_KEYS = new Set([
   'version',
 ]);
 
-export function sanitizeMeta(meta: Record<string, unknown> | undefined): Record<string, unknown> | null {
+export function sanitizeMeta(
+  meta: Record<string, unknown> | undefined,
+): Record<string, unknown> | null {
   if (!meta) return null;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(meta)) {

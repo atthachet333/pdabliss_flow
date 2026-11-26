@@ -63,9 +63,30 @@ export function buildReminderPreview(input: ReminderPreviewInput): FlexPreviewMo
 
 // ───────────────────────── LINE Flex Message JSON ─────────────────────────
 
-type FlexText = { type: 'text'; text: string; size?: string; weight?: string; color?: string; wrap?: boolean };
-type FlexBox = { type: 'box'; layout: 'vertical' | 'horizontal' | 'baseline'; contents: FlexNode[]; spacing?: string; paddingAll?: string; backgroundColor?: string };
-type FlexButton = { type: 'button'; style: 'primary' | 'secondary' | 'link'; height?: string; color?: string; action: { type: 'uri'; label: string; uri: string } | { type: 'postback'; label: string; data: string } };
+type FlexText = {
+  type: 'text';
+  text: string;
+  size?: string;
+  weight?: string;
+  color?: string;
+  wrap?: boolean;
+};
+type FlexBox = {
+  type: 'box';
+  layout: 'vertical' | 'horizontal' | 'baseline';
+  contents: FlexNode[];
+  spacing?: string;
+  paddingAll?: string;
+  backgroundColor?: string;
+};
+type FlexButton = {
+  type: 'button';
+  style: 'primary' | 'secondary' | 'link';
+  height?: string;
+  color?: string;
+  action:
+    { type: 'uri'; label: string; uri: string } | { type: 'postback'; label: string; data: string };
+};
 type FlexNode = FlexText | FlexBox | FlexButton | { type: 'separator' };
 
 export interface FlexMessage {
@@ -85,7 +106,12 @@ const THEME_COLORS: Record<string, string> = {
   urgent: '#B3261E',
 };
 
-const text = (t: string, extra: Partial<FlexText> = {}): FlexText => ({ type: 'text', text: t, wrap: true, ...extra });
+const text = (t: string, extra: Partial<FlexText> = {}): FlexText => ({
+  type: 'text',
+  text: t,
+  wrap: true,
+  ...extra,
+});
 
 /**
  * `detailUri` must be an https LIFF deep link (validated). Postback data are opaque
@@ -102,17 +128,38 @@ export function toFlexMessage(m: FlexPreviewModel, detailUri: string): FlexMessa
   if (m.location) bodyRows.push(text(`สถานที่: ${m.location}`, { size: 'xs', color: '#5B6560' }));
   if (m.destinationText) bodyRows.push(text(m.destinationText, { size: 'xxs', color: '#8A938E' }));
   const buttons: FlexNode[] = [
-    { type: 'button', style: 'primary', height: 'sm', color, action: { type: 'uri', label: m.primaryAction.label.slice(0, 40), uri: detailUri } },
+    {
+      type: 'button',
+      style: 'primary',
+      height: 'sm',
+      color,
+      action: { type: 'uri', label: m.primaryAction.label.slice(0, 40), uri: detailUri },
+    },
   ];
   if (m.secondaryAction)
-    buttons.push({ type: 'button', style: 'secondary', height: 'sm', action: { type: 'postback', label: m.secondaryAction.label.slice(0, 40), data: 'ack:preview' } });
+    buttons.push({
+      type: 'button',
+      style: 'secondary',
+      height: 'sm',
+      action: {
+        type: 'postback',
+        label: m.secondaryAction.label.slice(0, 40),
+        data: 'ack:preview',
+      },
+    });
   return {
     type: 'flex',
     altText: m.altText.slice(0, ALT_TEXT_MAX),
     contents: {
       type: 'bubble',
       size: 'mega',
-      header: { type: 'box', layout: 'vertical', backgroundColor: color, paddingAll: '12px', contents: [text(m.headerLabel, { size: 'sm', weight: 'bold', color: '#FFFFFF' })] },
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: color,
+        paddingAll: '12px',
+        contents: [text(m.headerLabel, { size: 'sm', weight: 'bold', color: '#FFFFFF' })],
+      },
       body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: bodyRows },
       footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: buttons },
     },
@@ -130,20 +177,28 @@ export function validateFlexMessage(msg: unknown): string[] {
   if (!c || c.type !== 'bubble') issues.push('contents must be a bubble');
   const walk = (n: unknown, path: string, depth: number) => {
     if (depth > 6) return issues.push(`${path}: nested too deeply`);
-    const node = n as { type?: string; text?: unknown; contents?: unknown[]; action?: { type?: string; uri?: string; label?: string } };
+    const node = n as {
+      type?: string;
+      text?: unknown;
+      contents?: unknown[];
+      action?: { type?: string; uri?: string; label?: string };
+    };
     if (!node || typeof node.type !== 'string') return issues.push(`${path}: missing type`);
     if (node.type === 'text' && (typeof node.text !== 'string' || !node.text.trim()))
       issues.push(`${path}: empty text`);
     if (node.type === 'box') {
-      if (!Array.isArray(node.contents) || node.contents.length === 0) issues.push(`${path}: empty box`);
+      if (!Array.isArray(node.contents) || node.contents.length === 0)
+        issues.push(`${path}: empty box`);
       else node.contents.forEach((x, i) => walk(x, `${path}.${i}`, depth + 1));
     }
     if (node.type === 'button') {
       const a = node.action;
       if (!a || !a.label || a.label.length > 40) issues.push(`${path}: bad action label`);
-      if (a?.type === 'uri' && !/^https:\/\//.test(a.uri ?? '')) issues.push(`${path}: uri must be https`);
+      if (a?.type === 'uri' && !/^https:\/\//.test(a.uri ?? ''))
+        issues.push(`${path}: uri must be https`);
     }
-    if (!['text', 'box', 'button', 'separator'].includes(node.type)) issues.push(`${path}: unsupported ${node.type}`);
+    if (!['text', 'box', 'button', 'separator'].includes(node.type))
+      issues.push(`${path}: unsupported ${node.type}`);
     return undefined;
   };
   if (c && c.type === 'bubble') {

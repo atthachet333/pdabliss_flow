@@ -274,6 +274,9 @@ export class StoreConflictError extends Error {
   }
 }
 
+/** The database rejected a transaction because another writer changed its snapshot. */
+export class StoreTransactionConflictError extends Error {}
+
 export interface Store {
   /** Runs fn atomically. Nested calls join the outer transaction. */
   transaction<T>(fn: (tx: Store) => Promise<T>): Promise<T>;
@@ -291,10 +294,17 @@ export interface Store {
   /** Conditional on authzVersion when given; bumps authzVersion when bumpAuthz. Returns updated row or null. */
   updateUser(
     id: string,
-    patch: Partial<Pick<UserRow, 'displayName' | 'status' | 'globalRole' | 'lastLoginAt' | 'statusChangedAt'>>,
+    patch: Partial<
+      Pick<UserRow, 'displayName' | 'status' | 'globalRole' | 'lastLoginAt' | 'statusChangedAt'>
+    >,
     opts: { now: Date; expectAuthzVersion?: number; bumpAuthz?: boolean },
   ): Promise<UserRow | null>;
-  listUsers(q: { statuses?: UserStatus[]; text?: string; limit: number; offset?: number }): Promise<UserRow[]>;
+  listUsers(q: {
+    statuses?: UserStatus[];
+    text?: string;
+    limit: number;
+    offset?: number;
+  }): Promise<UserRow[]>;
   countUsers(q: { statuses?: UserStatus[]; globalRoles?: GlobalRole[] }): Promise<number>;
 
   // sessions
@@ -307,19 +317,29 @@ export interface Store {
   purgeSessions(endedOrExpiredBefore: Date): Promise<number>;
 
   // rate limiting (atomic fixed window)
-  hitRateLimit(keyHash: Uint8Array, windowMs: number, now: Date): Promise<{ count: number; windowEnd: Date }>;
+  hitRateLimit(
+    keyHash: Uint8Array,
+    windowMs: number,
+    now: Date,
+  ): Promise<{ count: number; windowEnd: Date }>;
   purgeRateLimits(now: Date): Promise<number>;
 
   // webhook deduplication
   /** Inserts the event id; returns 'duplicate' when it already exists. */
   recordWebhookEvent(row: WebhookEventRow): Promise<'new' | 'duplicate'>;
   purgeWebhookEvents(now: Date): Promise<number>;
+  /** Removes idempotency records whose window has passed. */
+  purgeIdempotency(now: Date): Promise<number>;
 
   // access requests
   createAccessRequest(row: AccessRequestRow): Promise<void>;
   getAccessRequest(id: string): Promise<AccessRequestRow | null>;
   getOpenAccessRequest(userId: string): Promise<AccessRequestRow | null>;
-  listAccessRequests(q: { statuses?: AccessRequestStatus[]; userId?: string; limit: number }): Promise<AccessRequestRow[]>;
+  listAccessRequests(q: {
+    statuses?: AccessRequestStatus[];
+    userId?: string;
+    limit: number;
+  }): Promise<AccessRequestRow[]>;
   countAccessRequests(q: { statuses?: AccessRequestStatus[] }): Promise<number>;
   /** PENDING → status, atomically. Returns false if it was no longer PENDING. */
   decideAccessRequest(
@@ -342,7 +362,11 @@ export interface Store {
   createWorkspace(row: WorkspaceRow): Promise<void>;
   getWorkspace(id: string): Promise<WorkspaceRow | null>;
   getPersonalWorkspace(userId: string): Promise<WorkspaceRow | null>;
-  listWorkspaces(q: { ids?: string[]; statuses?: WorkspaceStatus[]; limit: number }): Promise<WorkspaceRow[]>;
+  listWorkspaces(q: {
+    ids?: string[];
+    statuses?: WorkspaceStatus[];
+    limit: number;
+  }): Promise<WorkspaceRow[]>;
   /** Optimistic: only when version matches; increments version. */
   updateWorkspace(
     id: string,
@@ -369,7 +393,9 @@ export interface Store {
   createDestination(row: DestinationRow): Promise<void>;
   updateDestination(
     id: string,
-    patch: Partial<Pick<DestinationRow, 'label' | 'status' | 'workspaceId' | 'audienceSize' | 'lastEventAt'>>,
+    patch: Partial<
+      Pick<DestinationRow, 'label' | 'status' | 'workspaceId' | 'audienceSize' | 'lastEventAt'>
+    >,
     now: Date,
   ): Promise<DestinationRow | null>;
   listDestinations(q: {
@@ -381,7 +407,10 @@ export interface Store {
   }): Promise<DestinationRow[]>;
   createDestinationGrant(row: DestinationGrantRow): Promise<void>;
   deleteDestinationGrant(destinationId: string, userId: string): Promise<boolean>;
-  listDestinationGrants(q: { destinationId?: string; userId?: string }): Promise<DestinationGrantRow[]>;
+  listDestinationGrants(q: {
+    destinationId?: string;
+    userId?: string;
+  }): Promise<DestinationGrantRow[]>;
 
   // appointments
   createAppointment(bundle: AppointmentBundle): Promise<void>;
@@ -416,5 +445,10 @@ export interface Store {
 
   // audit
   appendAudit(row: AuditRow): Promise<void>;
-  listAudit(q: { workspaceId?: string; resourceTypes?: string[]; limit: number; offset?: number }): Promise<AuditRow[]>;
+  listAudit(q: {
+    workspaceId?: string;
+    resourceTypes?: string[];
+    limit: number;
+    offset?: number;
+  }): Promise<AuditRow[]>;
 }

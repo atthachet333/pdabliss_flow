@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import { PersistentRateLimiter, PersistentSessions } from './auth/persistent.js';
 import { registerAuthRoutes } from './auth/routes.js';
-import type { Clock } from './core/context.js';
+import { ApiError, type Clock } from './core/context.js';
 import { AppointmentService } from './domain/appointments.js';
 import { DestinationService } from './domain/destinations.js';
 import { IdentityService } from './domain/identity.js';
@@ -23,6 +23,7 @@ import { InvitationService } from './domain/invitations.js';
 import { WorkspaceService } from './domain/workspaces.js';
 import type { AppEnv } from './env.js';
 import { registerV1Routes } from './http/v1.js';
+import { sendApiError } from './http/context.js';
 import type { Store } from './store/types.js';
 import { isAuthConfigured } from './env.js';
 import { cookieSettings } from './http/security.js';
@@ -32,7 +33,11 @@ import {
   type IdTokenVerifier,
 } from './line/id-token.js';
 import { createLineMessagingReader, type LineMessagingReader } from './line/messaging.js';
-import { registerWebhookRoute, WEBHOOK_DEDUPE_RETENTION_MS, WebhookRecorder } from './line/webhook.js';
+import {
+  registerWebhookRoute,
+  WEBHOOK_DEDUPE_RETENTION_MS,
+  WebhookRecorder,
+} from './line/webhook.js';
 
 export const SERVICE_NAME = 'pdabliss-flow-api';
 export const SERVICE_VERSION = '0.2.0-ep02';
@@ -86,7 +91,12 @@ const SECURITY_HEADERS: Record<string, string> = {
   'cache-control': 'no-store',
 };
 
-export function buildApp({ env, logStream, deps = {}, store = null }: BuildAppOptions): FastifyInstance {
+export function buildApp({
+  env,
+  logStream,
+  deps = {},
+  store = null,
+}: BuildAppOptions): FastifyInstance {
   const app = Fastify({
     logger:
       env.logLevel === 'silent' && !logStream
@@ -130,7 +140,10 @@ export function buildApp({ env, logStream, deps = {}, store = null }: BuildAppOp
     }
     reply
       .header('access-control-allow-methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
-      .header('access-control-allow-headers', 'content-type, authorization, x-flow-csrf, idempotency-key')
+      .header(
+        'access-control-allow-headers',
+        'content-type, authorization, x-flow-csrf, idempotency-key',
+      )
       .header('access-control-max-age', '600');
     return reply.code(204).send();
   });
@@ -268,7 +281,9 @@ export function buildApp({ env, logStream, deps = {}, store = null }: BuildAppOp
     });
   } else {
     app.all('/api/v1/*', async (request, reply) =>
-      reply.code(503).send(errorBody('SERVICE_NOT_CONFIGURED', 'The application is not configured', request.id)),
+      reply
+        .code(503)
+        .send(errorBody('SERVICE_NOT_CONFIGURED', 'The application is not configured', request.id)),
     );
   }
 
@@ -277,6 +292,7 @@ export function buildApp({ env, logStream, deps = {}, store = null }: BuildAppOp
   });
 
   app.setErrorHandler(async (error: FastifyError, request, reply) => {
+    if (error instanceof ApiError) return sendApiError(reply, request, error);
     if (error.validation) {
       return reply
         .code(400)
@@ -286,8 +302,19 @@ export function buildApp({ env, logStream, deps = {}, store = null }: BuildAppOp
       typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500
         ? error.statusCode
         : 500;
+    const failureCode = databaseFailureCode(error);
+    if (failureCode) {
+      request.log.error({ code: failureCode }, 'Database unavailable');
+      return reply
+        .code(503)
+        .header('retry-after', '30')
+        .send(
+          errorBody('DATABASE_UNAVAILABLE', 'The service is temporarily unavailable', request.id),
+        );
+    }
     if (status >= 500) {
-      request.log.error({ err: error }, 'Unhandled error');
+      // Driver and application errors can contain SQL or appointment content.
+      request.log.error('Unhandled error');
       return reply
         .code(500)
         .send(errorBody('INTERNAL_ERROR', 'An unexpected error occurred', request.id));
@@ -298,6 +325,52 @@ export function buildApp({ env, logStream, deps = {}, store = null }: BuildAppOp
   });
 
   return app;
+}
+
+const DATABASE_UNAVAILABLE_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ER_GET_CONNECTION_TIMEOUT',
+  'ER_CON_COUNT_ERROR',
+  'ER_CONNECTION_ALREADY_CLOSED',
+  'ER_CMD_CONNECTION_CLOSED',
+  'ER_CONNECTION_TIMEOUT',
+  'ER_CONNECTION_KILLED',
+  'ER_SOCKET_UNEXPECTED_CLOSE',
+  'ER_SOCKET_TIMEOUT',
+  'P1001',
+  'P1002',
+  'P1008',
+  'P1017',
+  'P2024',
+  'P2037',
+]);
+
+/** Accept only known connection failures, including MariaDB's adapter-wrapped errors. */
+export function databaseFailureCode(error: {
+  code?: unknown;
+  errorCode?: unknown;
+  cause?: unknown;
+  meta?: unknown;
+}): string | undefined {
+  const meta = error.meta as { driverAdapterError?: { cause?: unknown } } | undefined;
+  for (const candidate of [error, error.cause, meta?.driverAdapterError?.cause]) {
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    const { code, errorCode, kind } = candidate as Record<string, unknown>;
+    for (const value of [code, errorCode]) {
+      if (typeof value === 'string' && DATABASE_UNAVAILABLE_CODES.has(value)) return value;
+    }
+    if (
+      typeof kind === 'string' &&
+      ['ConnectionClosed', 'SocketTimeout', 'TooManyConnections', 'DatabaseNotReachable'].includes(
+        kind,
+      )
+    )
+      return kind;
+  }
+  return undefined;
 }
 
 export function errorBody(code: string, message: string, requestId: string): ErrorBody {

@@ -16,11 +16,18 @@ export interface RequestAuth {
 export async function loadActor(store: Store, userId: string): Promise<Actor | null> {
   const user = await store.getUser(userId);
   if (!user) return null;
-  const memberships = new Map<string, Actor['memberships'] extends Map<string, infer V> ? V : never>();
+  const memberships = new Map<
+    string,
+    Actor['memberships'] extends Map<string, infer V> ? V : never
+  >();
   if (user.status === 'ACTIVE') {
     const rows = await store.listMembershipsForUser(user.id, ['ACTIVE']);
     const workspaces = rows.length
-      ? await store.listWorkspaces({ ids: rows.map((r) => r.workspaceId), statuses: ['ACTIVE'], limit: rows.length })
+      ? await store.listWorkspaces({
+          ids: rows.map((r) => r.workspaceId),
+          statuses: ['ACTIVE'],
+          limit: rows.length,
+        })
       : [];
     const byId = new Map(workspaces.map((w) => [w.id, w]));
     for (const m of rows) {
@@ -43,9 +50,12 @@ export async function authenticate(
   const sessionId = readSessionCookie(request, deps.cookie) ?? null;
   const resolved = await deps.sessions.resolve(sessionId);
   if (resolved.status !== 'active')
-    throw new ApiError(401, 'UNAUTHENTICATED', 'Sign in required', { state: sessionStateCode(resolved.status) });
+    throw new ApiError(401, 'UNAUTHENTICATED', 'Sign in required', {
+      state: sessionStateCode(resolved.status),
+    });
   const actor = await loadActor(deps.store, resolved.session.userId);
-  if (!actor) throw new ApiError(401, 'UNAUTHENTICATED', 'Sign in required', { state: 'unauthenticated' });
+  if (!actor)
+    throw new ApiError(401, 'UNAUTHENTICATED', 'Sign in required', { state: 'unauthenticated' });
   return {
     actor,
     sessionId: resolved.sessionId,
@@ -57,7 +67,8 @@ export async function authenticate(
 /** Application endpoints require an ACTIVE account; other states get a precise 403. */
 export function requireActive(auth: RequestAuth): void {
   const s = auth.actor.user.status;
-  if (s !== 'ACTIVE') throw new ApiError(403, `ACCOUNT_${s}`, 'Account is not active', { state: s.toLowerCase() });
+  if (s !== 'ACTIVE')
+    throw new ApiError(403, `ACCOUNT_${s}`, 'Account is not active', { state: s.toLowerCase() });
 }
 
 export function sendApiError(reply: FastifyReply, request: FastifyRequest, err: ApiError) {

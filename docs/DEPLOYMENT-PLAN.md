@@ -4,17 +4,17 @@
 
 ## Target
 
-| Item            | Value (proposed)                                                                                 |
-| --------------- | ------------------------------------------------------------------------------------------------ |
-| Host            | Existing PDA BLISS Windows 11 Pro server (i7-10700, 64 GB)                                       |
-| Domain          | `flow.pdabliss.com` via the existing Cloudflare Tunnel (new ingress rule only)                   |
-| Processes (PM2) | `pdabliss-flow-frontend` (static/preview), `pdabliss-flow-backend` (API), `pdabliss-flow-worker` |
-| Database        | New isolated PostgreSQL database `pdabliss_flow` with a dedicated role (least privilege)         |
-| Ports           | Bound to 127.0.0.1 only. Chosen after discovering free ports on the server (6767/6768 proposed)  |
+| Item            | Value (proposed)                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------- |
+| Host            | Existing PDA BLISS Windows 11 Pro server (i7-10700, 64 GB)                                            |
+| Domain          | `flow.pdabliss.com` via the existing Cloudflare Tunnel (new ingress rule only)                        |
+| Processes (PM2) | `pdabliss-flow-frontend` (static/preview), `pdabliss-flow-backend` (API), `pdabliss-flow-worker`      |
+| Database        | New isolated MariaDB database `pdabliss_flow` with dedicated least-privilege accounts (EP02 decision) |
+| Ports           | Bound to 127.0.0.1 only. Chosen after discovering free ports on the server (6767/6768 proposed)       |
 
 ## Steps
 
-1. **Discovery (read-only)**: list PM2 processes, listening ports, tunnel ingress, PostgreSQL
+1. **Discovery (read-only)**: list PM2 processes, listening ports, tunnel ingress, MariaDB
    roles and databases, disk space. Record everything in EP07 notes. Change nothing.
 2. **Directory**: a dedicated folder outside OneDrive (for example `D:\apps\pdabliss_flow`),
    deployed from Git by tag.

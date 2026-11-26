@@ -2,7 +2,7 @@
   "name": "pdabliss-flow",
   "version": "0.0.0",
   "private": true,
-  "description": "PDA BLISS FLOW \u2014 Shared Calendar & LINE Personal Assistant (Sally).",
+  "description": "PDA BLISS FLOW — Shared Calendar & LINE Personal Assistant (Sally).",
   "license": "UNLICENSED",
   "type": "module",
   "engines": {
@@ -24,7 +24,7 @@
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "npm run build:shared && npm run test --workspaces --if-present",
+    "test": "npm run build:shared && npm run test --workspaces --if-present && node --test scripts/db-drift.test.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "brand:generate": "node scripts/generate-brand-assets.mjs",
     "access": "node scripts/flow-access.mjs",
@@ -44,5 +44,8 @@
     "tsx": "^4.20.5",
     "typescript": "~5.9.2",
     "typescript-eslint": "^8.44.0"
+  },
+  "overrides": {
+    "effect": "3.22.1"
   }
 }

@@ -66,7 +66,10 @@ export function canInWorkspace(a: Actor, action: WorkspaceAction, workspaceId: s
   if (!m) return false;
   if (!WORKSPACE_MATRIX[action].includes(m.role)) return false;
   const personal = m.workspace.kind === 'PERSONAL';
-  if (personal && (action === 'workspace.archive' || action === 'workspace.leave' || action === 'members.manage'))
+  if (
+    personal &&
+    (action === 'workspace.archive' || action === 'workspace.leave' || action === 'members.manage')
+  )
     return false;
   return true;
 }
@@ -174,7 +177,11 @@ export interface DestinationContext {
   actorHasGrant: boolean;
 }
 
-export function decideDestination(a: Actor, d: DestinationRow, ctx: DestinationContext): DestinationDecision {
+export function decideDestination(
+  a: Actor,
+  d: DestinationRow,
+  ctx: DestinationContext,
+): DestinationDecision {
   if (d.status !== 'ACTIVE') return { ok: false, code: 'DESTINATION_UNAVAILABLE' };
   const role = roleIn(a, ctx.workspaceId);
   if (role === null || role === 'VIEWER') return { ok: false, code: 'DESTINATION_NOT_PERMITTED' };
@@ -192,11 +199,16 @@ export function decideDestination(a: Actor, d: DestinationRow, ctx: DestinationC
   }
   // GROUP: must belong to the appointment's workspace, and the actor must be its admin or hold a grant.
   if (d.workspaceId !== ctx.workspaceId) return { ok: false, code: 'DESTINATION_NOT_PERMITTED' };
-  if (role !== 'ADMIN' && !ctx.actorHasGrant) return { ok: false, code: 'DESTINATION_NOT_PERMITTED' };
+  if (role !== 'ADMIN' && !ctx.actorHasGrant)
+    return { ok: false, code: 'DESTINATION_NOT_PERMITTED' };
   // Everyone in a LINE group sees group messages: full details only for workspace-visible appointments.
   if (ctx.contentPolicy === 'FULL' && ctx.visibility !== 'WORKSPACE')
     return { ok: false, code: 'PRIVATE_CONTENT_TO_GROUP' };
-  if (ctx.contentPolicy === 'FULL' && SENSITIVE_CATEGORIES.has(ctx.category) && !ctx.confirmSensitive)
+  if (
+    ctx.contentPolicy === 'FULL' &&
+    SENSITIVE_CATEGORIES.has(ctx.category) &&
+    !ctx.confirmSensitive
+  )
     return { ok: false, code: 'SENSITIVE_CONFIRMATION_REQUIRED' };
   return { ok: true };
 }

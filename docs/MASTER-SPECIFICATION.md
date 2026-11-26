@@ -4,6 +4,11 @@
   Imported: 2026-11-26.
 -->
 
+> **Owner amendment (2026-11-26, before EP02 implementation):** the database is **MariaDB**
+> (InnoDB, utf8mb4) with Prisma, replacing PostgreSQL. Wherever the verbatim text below says
+> PostgreSQL, read MariaDB. The EP00 and EP01 reports are historical and keep their original
+> wording. Details: [EP02-DATABASE.md](EP02-DATABASE.md).
+
 # PDA BLISS FLOW
 
 ## EP00 — Signature Product Identity, Design System & Engineering Foundation

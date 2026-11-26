@@ -10,10 +10,24 @@ import {
 
 const BKK = 'Asia/Bangkok';
 const NOW = new Date('2026-11-26T02:00:00Z'); // 26 Nov 09:00 Bangkok
-const timed = (localDate: string, localTime: string) => ({ allDay: false, localDate, localTime, timeZone: BKK });
+const timed = (localDate: string, localTime: string) => ({
+  allDay: false,
+  localDate,
+  localTime,
+  timeZone: BKK,
+});
 const iso = (d: Date | null) => d?.toISOString() ?? null;
-const cal = (dayOffset: number, localTime: string, enabled = true): ReminderRuleInput => ({ kind: 'CALENDAR', dayOffset, localTime, enabled });
-const rel = (offsetMinutes: number, enabled = true): ReminderRuleInput => ({ kind: 'RELATIVE', offsetMinutes, enabled });
+const cal = (dayOffset: number, localTime: string, enabled = true): ReminderRuleInput => ({
+  kind: 'CALENDAR',
+  dayOffset,
+  localTime,
+  enabled,
+});
+const rel = (offsetMinutes: number, enabled = true): ReminderRuleInput => ({
+  kind: 'RELATIVE',
+  offsetMinutes,
+  enabled,
+});
 
 describe('reminder rules v1 (RELATIVE + CALENDAR)', () => {
   it('owner example: 10:00 appointment → 06:00 same day and 1 h before (09:00)', () => {
@@ -31,7 +45,10 @@ describe('reminder rules v1 (RELATIVE + CALENDAR)', () => {
 
   it('owner example: moved to 13:00 → 06:00 stays, relative moves to 12:00', () => {
     const r = calculateReminders(timed('2026-12-10', '13:00'), DEFAULT_REMINDER_RULES, NOW);
-    assert.deepEqual(r.reminders.map((x) => iso(x.fireAt)), ['2026-12-09T23:00:00.000Z', '2026-12-10T05:00:00.000Z']);
+    assert.deepEqual(
+      r.reminders.map((x) => iso(x.fireAt)),
+      ['2026-12-09T23:00:00.000Z', '2026-12-10T05:00:00.000Z'],
+    );
   });
 
   it('previous-day CALENDAR rule fires the evening before', () => {
@@ -41,10 +58,20 @@ describe('reminder rules v1 (RELATIVE + CALENDAR)', () => {
   });
 
   it('all-day appointments anchor RELATIVE rules at 08:00 local; CALENDAR rules use their own time', () => {
-    const r = calculateReminders({ allDay: true, localDate: '2026-12-10', localTime: null, timeZone: BKK }, [rel(60), cal(0, '06:00'), cal(0, '20:00')], NOW);
+    const r = calculateReminders(
+      { allDay: true, localDate: '2026-12-10', localTime: null, timeZone: BKK },
+      [rel(60), cal(0, '06:00'), cal(0, '20:00')],
+      NOW,
+    );
     assert.equal(iso(r.anchor), '2026-12-10T01:00:00.000Z');
-    assert.deepEqual(r.reminders.map((x) => iso(x.fireAt)), ['2026-12-10T00:00:00.000Z', '2026-12-09T23:00:00.000Z', '2026-12-10T13:00:00.000Z']);
-    assert.ok(r.reminders.every((x) => x.status === 'SCHEDULED'), 'a same-day evening rule is allowed for all-day events');
+    assert.deepEqual(
+      r.reminders.map((x) => iso(x.fireAt)),
+      ['2026-12-10T00:00:00.000Z', '2026-12-09T23:00:00.000Z', '2026-12-10T13:00:00.000Z'],
+    );
+    assert.ok(
+      r.reminders.every((x) => x.status === 'SCHEDULED'),
+      'a same-day evening rule is allowed for all-day events',
+    );
   });
 
   it('a CALENDAR time after a timed start is invalid ("after-start")', () => {
@@ -55,23 +82,46 @@ describe('reminder rules v1 (RELATIVE + CALENDAR)', () => {
   });
 
   it('reminders within one minute of now or in the past are PAST, never scheduled', () => {
-    const r = calculateReminders(timed('2026-11-26', '10:00'), [cal(0, '06:00'), rel(60), rel(30)], NOW);
-    assert.deepEqual(r.reminders.map((x) => x.status), ['PAST', 'PAST', 'SCHEDULED']);
-    const at = (ms: number) => calculateReminders(timed('2026-11-26', '09:01'), [rel(0)], new Date(NOW.getTime() + ms)).reminders[0]!.status;
+    const r = calculateReminders(
+      timed('2026-11-26', '10:00'),
+      [cal(0, '06:00'), rel(60), rel(30)],
+      NOW,
+    );
+    assert.deepEqual(
+      r.reminders.map((x) => x.status),
+      ['PAST', 'PAST', 'SCHEDULED'],
+    );
+    const at = (ms: number) =>
+      calculateReminders(timed('2026-11-26', '09:01'), [rel(0)], new Date(NOW.getTime() + ms))
+        .reminders[0]!.status;
     assert.equal(at(0), 'SCHEDULED', 'exactly one minute of lead is enough');
     assert.equal(at(1), 'PAST', 'less than the one-minute lead');
   });
 
   it('same kind at the same instant is DUPLICATE; other kind at the same instant is flagged sameTimeAs', () => {
-    const r = calculateReminders(timed('2026-12-10', '10:00'), [rel(60), rel(60), cal(0, '09:00')], NOW);
-    assert.deepEqual(r.reminders.map((x) => x.status), ['SCHEDULED', 'DUPLICATE', 'SCHEDULED']);
+    const r = calculateReminders(
+      timed('2026-12-10', '10:00'),
+      [rel(60), rel(60), cal(0, '09:00')],
+      NOW,
+    );
+    assert.deepEqual(
+      r.reminders.map((x) => x.status),
+      ['SCHEDULED', 'DUPLICATE', 'SCHEDULED'],
+    );
     assert.equal(r.reminders[1]!.duplicateOf, 0);
     assert.equal(r.reminders[2]!.sameTimeAs, 0);
   });
 
   it('disabled rules and cancelled appointments never schedule', () => {
-    assert.equal(calculateReminders(timed('2026-12-10', '10:00'), [rel(60, false)], NOW).reminders[0]!.status, 'DISABLED');
-    const c = calculateReminders({ ...timed('2026-12-10', '10:00'), cancelled: true }, DEFAULT_REMINDER_RULES, NOW);
+    assert.equal(
+      calculateReminders(timed('2026-12-10', '10:00'), [rel(60, false)], NOW).reminders[0]!.status,
+      'DISABLED',
+    );
+    const c = calculateReminders(
+      { ...timed('2026-12-10', '10:00'), cancelled: true },
+      DEFAULT_REMINDER_RULES,
+      NOW,
+    );
     assert.ok(c.reminders.every((x) => x.status === 'CANCELLED'));
   });
 
@@ -81,8 +131,21 @@ describe('reminder rules v1 (RELATIVE + CALENDAR)', () => {
       [rel(-5), rel(1.5), cal(1, '06:00'), cal(-8, '06:00'), cal(0, '24:00')],
       NOW,
     );
-    assert.deepEqual(r.reminders.map((x) => x.issue), ['invalid-offset', 'invalid-offset', 'invalid-day-offset', 'invalid-day-offset', 'invalid-time']);
-    const many = calculateReminders(timed('2026-12-10', '10:00'), Array.from({ length: MAX_REMINDER_RULES + 1 }, (_, i) => rel(i * 10)), NOW);
+    assert.deepEqual(
+      r.reminders.map((x) => x.issue),
+      [
+        'invalid-offset',
+        'invalid-offset',
+        'invalid-day-offset',
+        'invalid-day-offset',
+        'invalid-time',
+      ],
+    );
+    const many = calculateReminders(
+      timed('2026-12-10', '10:00'),
+      Array.from({ length: MAX_REMINDER_RULES + 1 }, (_, i) => rel(i * 10)),
+      NOW,
+    );
     assert.equal(many.reminders.at(-1)!.issue, 'too-many');
     assert.throws(() => calculateReminders(timed('2026-02-30', '10:00'), [], NOW), RangeError);
     assert.throws(() => calculateReminders(timed('2026-12-10', '25:00'), [], NOW), RangeError);
@@ -90,15 +153,29 @@ describe('reminder rules v1 (RELATIVE + CALENDAR)', () => {
 
   it('time-zone boundaries: Bangkok midnight, new year and the previous-day rule across a month/year', () => {
     const ny = calculateReminders(timed('2027-01-01', '00:30'), [cal(-1, '21:00'), rel(60)], NOW);
-    assert.deepEqual(ny.reminders.map((x) => iso(x.fireAt)), ['2026-12-31T14:00:00.000Z', '2026-12-31T16:30:00.000Z']);
-    const early = calculateReminders(timed('2026-12-01', '06:30'), [cal(0, '06:00'), rel(420)], NOW);
-    assert.deepEqual(early.reminders.map((x) => iso(x.fireAt)), ['2026-11-30T23:00:00.000Z', '2026-11-30T16:30:00.000Z']);
+    assert.deepEqual(
+      ny.reminders.map((x) => iso(x.fireAt)),
+      ['2026-12-31T14:00:00.000Z', '2026-12-31T16:30:00.000Z'],
+    );
+    const early = calculateReminders(
+      timed('2026-12-01', '06:30'),
+      [cal(0, '06:00'), rel(420)],
+      NOW,
+    );
+    assert.deepEqual(
+      early.reminders.map((x) => iso(x.fireAt)),
+      ['2026-11-30T23:00:00.000Z', '2026-11-30T16:30:00.000Z'],
+    );
   });
 
   it('leap day: 29 Feb 2028 works, and a previous-day rule on 1 Mar lands on 29 Feb', () => {
     const r = calculateReminders(timed('2028-03-01', '09:00'), [cal(-1, '18:00')], NOW);
     assert.equal(iso(r.reminders[0]!.fireAt), '2028-02-29T11:00:00.000Z');
-    const leap = calculateReminders({ allDay: true, localDate: '2028-02-29', localTime: null, timeZone: BKK }, [cal(0, '06:00')], NOW);
+    const leap = calculateReminders(
+      { allDay: true, localDate: '2028-02-29', localTime: null, timeZone: BKK },
+      [cal(0, '06:00')],
+      NOW,
+    );
     assert.equal(iso(leap.reminders[0]!.fireAt), '2028-02-28T23:00:00.000Z');
     assert.throws(() => calculateReminders(timed('2027-02-29', '09:00'), [], NOW), RangeError);
   });

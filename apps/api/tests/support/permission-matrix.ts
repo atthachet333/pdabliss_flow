@@ -6,7 +6,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Store } from '../../src/store/types.js';
-import { appointmentPayload, createHarness, idem, seedUser, seedWorkspace, type Client } from './harness.js';
+import {
+  appointmentPayload,
+  createHarness,
+  idem,
+  seedUser,
+  seedWorkspace,
+  type Client,
+} from './harness.js';
 
 export const ROLES = [
   'globalOwner',
@@ -34,14 +41,14 @@ type Action =
 /** Expected outcome per action, in ROLES order. */
 export const MATRIX: Record<Action, readonly (0 | 1)[]> = {
   //                                          own adm wsA mem vie out pen sus rev
-  'view workspace appointment':              [0,  0,  1,  1,  1,  0,  0,  0,  0],
-  'view a member’s private appointment':     [0,  0,  0,  0,  0,  0,  0,  0,  0],
-  'create appointment in workspace':         [0,  0,  1,  1,  0,  0,  0,  0,  0],
-  'edit workspace appointment':              [0,  0,  1,  0,  0,  0,  0,  0,  0],
-  'manage workspace members':                [0,  0,  1,  0,  0,  0,  0,  0,  0],
-  'open owner console (users)':              [1,  1,  0,  0,  0,  0,  0,  0,  0],
-  'change a global role':                    [1,  0,  0,  0,  0,  0,  0,  0,  0],
-  'manage LINE destinations':                [1,  0,  0,  0,  0,  0,  0,  0,  0],
+  'view workspace appointment': [0, 0, 1, 1, 1, 0, 0, 0, 0],
+  'view a member’s private appointment': [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  'create appointment in workspace': [0, 0, 1, 1, 0, 0, 0, 0, 0],
+  'edit workspace appointment': [0, 0, 1, 0, 0, 0, 0, 0, 0],
+  'manage workspace members': [0, 0, 1, 0, 0, 0, 0, 0, 0],
+  'open owner console (users)': [1, 1, 0, 0, 0, 0, 0, 0, 0],
+  'change a global role': [1, 0, 0, 0, 0, 0, 0, 0, 0],
+  'manage LINE destinations': [1, 0, 0, 0, 0, 0, 0, 0, 0],
 };
 
 export function definePermissionMatrix(label: string, makeStore: () => Promise<Store>): void {
@@ -74,7 +81,11 @@ export function definePermissionMatrix(label: string, makeStore: () => Promise<S
       const ac = h.client();
       await ac.login(author.token);
       const mk = async (visibility: 'WORKSPACE' | 'PRIVATE') => {
-        const r = await ac.post('/api/v1/appointments', appointmentPayload(family.id, { visibility }), idem());
+        const r = await ac.post(
+          '/api/v1/appointments',
+          appointmentPayload(family.id, { visibility }),
+          idem(),
+        );
         assert.equal(r.statusCode, 201);
         return r.json().appointment as { id: string; version: number };
       };
@@ -88,22 +99,41 @@ export function definePermissionMatrix(label: string, makeStore: () => Promise<S
       }
       // Suspend and revoke through the console after login: existing sessions must die too.
       const owner = clients.globalOwner;
-      assert.equal((await owner.post(`/api/v1/admin/users/${users.suspended.id}/status`, { action: 'suspend' })).statusCode, 200);
-      assert.equal((await owner.post(`/api/v1/admin/users/${users.revoked.id}/status`, { action: 'revoke' })).statusCode, 200);
-      for (const role of ['suspended', 'revoked'] as const) await clients[role].login(users[role].token);
+      assert.equal(
+        (
+          await owner.post(`/api/v1/admin/users/${users.suspended.id}/status`, {
+            action: 'suspend',
+          })
+        ).statusCode,
+        200,
+      );
+      assert.equal(
+        (await owner.post(`/api/v1/admin/users/${users.revoked.id}/status`, { action: 'revoke' }))
+          .statusCode,
+        200,
+      );
+      for (const role of ['suspended', 'revoked'] as const)
+        await clients[role].login(users[role].token);
 
       let extra = 100;
       const run: Record<Action, (c: Client) => Promise<{ statusCode: number; body: string }>> = {
         'view workspace appointment': (c) => c.get(`/api/v1/appointments/${shared.id}`),
         'view a member’s private appointment': (c) => c.get(`/api/v1/appointments/${priv.id}`),
-        'create appointment in workspace': (c) => c.post('/api/v1/appointments', appointmentPayload(family.id), idem()),
+        'create appointment in workspace': (c) =>
+          c.post('/api/v1/appointments', appointmentPayload(family.id), idem()),
         'edit workspace appointment': async (c) => {
           const a = await mk('WORKSPACE');
-          return c.put(`/api/v1/appointments/${a.id}`, { version: a.version, appointment: appointmentPayload(family.id, { visibility: 'WORKSPACE', title: 'แก้ไข' }) });
+          return c.put(`/api/v1/appointments/${a.id}`, {
+            version: a.version,
+            appointment: appointmentPayload(family.id, { visibility: 'WORKSPACE', title: 'แก้ไข' }),
+          });
         },
         'manage workspace members': async (c) => {
           const target = await seedUser(s, (extra += 1));
-          return c.post(`/api/v1/workspaces/${family.id}/members`, { userId: target.id, role: 'MEMBER' });
+          return c.post(`/api/v1/workspaces/${family.id}/members`, {
+            userId: target.id,
+            role: 'MEMBER',
+          });
         },
         'open owner console (users)': (c) => c.get('/api/v1/admin/users'),
         'change a global role': async (c) => {
@@ -119,7 +149,10 @@ export function definePermissionMatrix(label: string, makeStore: () => Promise<S
           const r = await run[action](clients[role]);
           const allowed = r.statusCode >= 200 && r.statusCode < 300;
           if (r.statusCode >= 500) failures.push(`${action} / ${role}: ${r.statusCode}`);
-          if (allowed !== (expected[i] === 1)) failures.push(`${action} / ${role}: got ${r.statusCode}, expected ${expected[i] ? 'allow' : 'deny'}`);
+          if (allowed !== (expected[i] === 1))
+            failures.push(
+              `${action} / ${role}: got ${r.statusCode}, expected ${expected[i] ? 'allow' : 'deny'}`,
+            );
           if (!allowed && action.startsWith('view') && r.body.includes('appointment')) {
             if (/"title"/.test(r.body)) failures.push(`${action} / ${role}: denial leaked content`);
           }

@@ -1,16 +1,35 @@
 /** Database guard — runs anywhere (no connection is made). */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { assertDatabaseTarget, assertDestructiveAllowed, DbGuardError, describeTarget, parseDatabaseUrl } from '../src/db/guard.js';
+import {
+  assertDatabaseTarget,
+  assertDestructiveAllowed,
+  DbGuardError,
+  describeTarget,
+  parseDatabaseUrl,
+} from '../src/db/guard.js';
 
-const U = (host: string, db: string, extra = '') => `mysql://flow_x:s3cr3t-value@${host}:3306/${db}${extra}`;
+const U = (host: string, db: string, extra = '') =>
+  `mysql://flow_x:s3cr3t-value@${host}:3306/${db}${extra}`;
 
 describe('database guard', () => {
   it('accepts only the exact expected database for each purpose on loopback', () => {
-    assert.equal(assertDatabaseTarget(U('127.0.0.1', 'pdabliss_flow_dev'), 'dev-runtime').database, 'pdabliss_flow_dev');
-    assert.equal(assertDatabaseTarget(U('localhost', 'pdabliss_flow_dev'), 'dev-migrate').database, 'pdabliss_flow_dev');
-    assert.equal(assertDatabaseTarget(U('127.0.0.1', 'pdabliss_flow_test'), 'test').database, 'pdabliss_flow_test');
-    assert.equal(assertDatabaseTarget(U('[::1]', 'pdabliss_flow_shadow'), 'shadow').database, 'pdabliss_flow_shadow');
+    assert.equal(
+      assertDatabaseTarget(U('127.0.0.1', 'pdabliss_flow_dev'), 'dev-runtime').database,
+      'pdabliss_flow_dev',
+    );
+    assert.equal(
+      assertDatabaseTarget(U('localhost', 'pdabliss_flow_dev'), 'dev-migrate').database,
+      'pdabliss_flow_dev',
+    );
+    assert.equal(
+      assertDatabaseTarget(U('127.0.0.1', 'pdabliss_flow_test'), 'test').database,
+      'pdabliss_flow_test',
+    );
+    assert.equal(
+      assertDatabaseTarget(U('[::1]', 'pdabliss_flow_shadow'), 'shadow').database,
+      'pdabliss_flow_shadow',
+    );
   });
 
   it('rejects production, unexpected names, remote hosts, cross-purpose use and ambiguous URLs', () => {
@@ -29,7 +48,8 @@ describe('database guard', () => {
       ['', 'test'],
       ['not a url', 'test'],
     ];
-    for (const [url, purpose] of bad) assert.throws(() => assertDatabaseTarget(url, purpose), DbGuardError, `${url} ${purpose}`);
+    for (const [url, purpose] of bad)
+      assert.throws(() => assertDatabaseTarget(url, purpose), DbGuardError, `${url} ${purpose}`);
   });
 
   it('destructive operations are allowed on the test database only', () => {

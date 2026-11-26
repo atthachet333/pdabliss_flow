@@ -1,6 +1,19 @@
 /** Workspaces and memberships (My Groups). Authorization via policy.ts only. */
-import { type Clock, badRequest, conflictError, forbidden, newId, notFound } from '../core/context.js';
-import type { MemberRow, Store, WorkspaceKind, WorkspaceRole, WorkspaceRow } from '../store/types.js';
+import {
+  type Clock,
+  badRequest,
+  conflictError,
+  forbidden,
+  newId,
+  notFound,
+} from '../core/context.js';
+import type {
+  MemberRow,
+  Store,
+  WorkspaceKind,
+  WorkspaceRole,
+  WorkspaceRow,
+} from '../store/types.js';
 import { audit } from './audit.js';
 import { ensureMember } from './identity.js';
 import { type Actor, canGlobal, canInWorkspace } from './policy.js';
@@ -8,6 +21,7 @@ import { type Actor, canGlobal, canInWorkspace } from './policy.js';
 export const WORKSPACE_NAME_MAX = 80;
 
 function cleanName(name: string): string {
+  // eslint-disable-next-line no-control-regex -- Strip C0 and DEL from single-line workspace names.
   const s = name.replace(/[\u0000-\u001f\u007f]/g, '').trim();
   if (!s || [...s].length > WORKSPACE_NAME_MAX) throw badRequest('INVALID_NAME');
   return s;
@@ -19,7 +33,11 @@ export class WorkspaceService {
     private readonly clock: Clock,
   ) {}
 
-  async create(actor: Actor, name: string, kind: Exclude<WorkspaceKind, 'PERSONAL'>): Promise<WorkspaceRow> {
+  async create(
+    actor: Actor,
+    name: string,
+    kind: Exclude<WorkspaceKind, 'PERSONAL'>,
+  ): Promise<WorkspaceRow> {
     if (!canGlobal(actor, 'workspaces.create')) throw forbidden();
     const now = this.clock();
     return this.store.transaction(async (tx) => {
@@ -63,7 +81,10 @@ export class WorkspaceService {
     const updated = await this.store.updateWorkspace(
       workspaceId,
       version,
-      { ...(patch.name !== undefined ? { name: cleanName(patch.name) } : {}), ...(patch.kind ? { kind: patch.kind } : {}) },
+      {
+        ...(patch.name !== undefined ? { name: cleanName(patch.name) } : {}),
+        ...(patch.kind ? { kind: patch.kind } : {}),
+      },
       now,
     );
     if (!updated) throw conflictError('VERSION_CONFLICT');
@@ -82,7 +103,12 @@ export class WorkspaceService {
   async archive(actor: Actor, workspaceId: string, version: number): Promise<WorkspaceRow> {
     if (!canInWorkspace(actor, 'workspace.archive', workspaceId)) throw notFound();
     const now = this.clock();
-    const updated = await this.store.updateWorkspace(workspaceId, version, { status: 'ARCHIVED', archivedAt: now }, now);
+    const updated = await this.store.updateWorkspace(
+      workspaceId,
+      version,
+      { status: 'ARCHIVED', archivedAt: now },
+      now,
+    );
     if (!updated) throw conflictError('VERSION_CONFLICT');
     await audit(this.store, {
       actorUserId: actor.user.id,
@@ -95,13 +121,24 @@ export class WorkspaceService {
     return updated;
   }
 
-  private async assertAdminRemains(store: Store, workspaceId: string, changingUserId: string): Promise<void> {
-    const admins = (await store.listMembers(workspaceId, ['ACTIVE'])).filter((m) => m.role === 'ADMIN');
+  private async assertAdminRemains(
+    store: Store,
+    workspaceId: string,
+    changingUserId: string,
+  ): Promise<void> {
+    const admins = (await store.listMembers(workspaceId, ['ACTIVE'])).filter(
+      (m) => m.role === 'ADMIN',
+    );
     if (admins.length <= 1 && admins[0]?.userId === changingUserId)
       throw conflictError('LAST_WORKSPACE_ADMIN', 'A workspace needs at least one admin');
   }
 
-  async addMember(actor: Actor, workspaceId: string, userId: string, role: WorkspaceRole): Promise<MemberRow> {
+  async addMember(
+    actor: Actor,
+    workspaceId: string,
+    userId: string,
+    role: WorkspaceRole,
+  ): Promise<MemberRow> {
     if (!canInWorkspace(actor, 'members.manage', workspaceId)) throw notFound();
     const now = this.clock();
     return this.store.transaction(async (tx) => {
@@ -122,13 +159,19 @@ export class WorkspaceService {
     });
   }
 
-  async changeRole(actor: Actor, workspaceId: string, userId: string, role: WorkspaceRole): Promise<MemberRow> {
+  async changeRole(
+    actor: Actor,
+    workspaceId: string,
+    userId: string,
+    role: WorkspaceRole,
+  ): Promise<MemberRow> {
     if (!canInWorkspace(actor, 'members.manage', workspaceId)) throw notFound();
     const now = this.clock();
     return this.store.transaction(async (tx) => {
       const current = await tx.getMember(workspaceId, userId);
       if (!current || current.status !== 'ACTIVE') throw notFound();
-      if (current.role === 'ADMIN' && role !== 'ADMIN') await this.assertAdminRemains(tx, workspaceId, userId);
+      if (current.role === 'ADMIN' && role !== 'ADMIN')
+        await this.assertAdminRemains(tx, workspaceId, userId);
       const m = await tx.updateMember(workspaceId, userId, { role }, now);
       if (!m) throw notFound();
       await tx.updateUser(userId, {}, { now, bumpAuthz: true });
@@ -147,7 +190,8 @@ export class WorkspaceService {
 
   async removeMember(actor: Actor, workspaceId: string, userId: string): Promise<void> {
     const self = userId === actor.user.id;
-    if (!canInWorkspace(actor, self ? 'workspace.leave' : 'members.manage', workspaceId)) throw notFound();
+    if (!canInWorkspace(actor, self ? 'workspace.leave' : 'members.manage', workspaceId))
+      throw notFound();
     const now = this.clock();
     await this.store.transaction(async (tx) => {
       const current = await tx.getMember(workspaceId, userId);

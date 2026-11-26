@@ -5,6 +5,14 @@
  *   npm run admin -- import-ep01-owner [--allow-additional-owner]
  *   npm run admin -- owners
  *   npm run admin -- promote-owner <user-uuid> --confirm      (emergency recovery)
+ *   npm run admin -- recent-signins                            (new workstation bootstrap, step 1)
+ *   npm run admin -- bootstrap-owner <user-uuid> --confirm     (new workstation bootstrap, step 2)
+ *
+ * New-workstation bootstrap (no EP01 access file available): the owner opens FLOW from LINE
+ * once — LINE verifies the identity server-side and FLOW records a NEW account. Within 30
+ * minutes, `recent-signins` lists those accounts with a masked LINE user ID; the owner compares
+ * it with "Your user ID" in the LINE Developers console and runs `bootstrap-owner`. It refuses
+ * when an active owner already exists, and never accepts a typed LINE id or a display name.
  *
  * Reads DATABASE_URL from the external secret file (guarded: pdabliss_flow_dev on this
  * computer). Output never shows full LINE ids, secrets or connection strings.
@@ -20,6 +28,8 @@ import { importOwner } from '../domain/identity.js';
 import { createPrismaClient, PrismaStore } from '../store/prisma.js';
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+
+const BOOTSTRAP_WINDOW_MS = 30 * 60_000;
 
 function stamp(d: Date): string {
   return d.toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
@@ -51,18 +61,24 @@ async function main(): Promise<number> {
         const ep01 = new FileAccessStore({ dir });
         const owners = ep01.listUsers().filter((u) => u.role === 'owner' && u.status === 'active');
         if (owners.length === 0) {
-          console.error('No active EP01 owner found in the external access file. Nothing imported.');
+          console.error(
+            'No active EP01 owner found in the external access file. Nothing imported.',
+          );
           return 1;
         }
         if (owners.length > 1 && !args.includes('--allow-additional-owner')) {
-          console.error('The EP01 access file lists more than one active owner. Review it first (no changes made).');
+          console.error(
+            'The EP01 access file lists more than one active owner. Review it first (no changes made).',
+          );
           return 1;
         }
         const accessFile = join(dir, 'access.json');
         const backup = join(dir, `access.ep01-backup-${stamp(new Date())}.json`);
         if (existsSync(accessFile)) {
           copyFileSync(accessFile, backup);
-          console.log('Backed up the EP01 access file next to the original (external secret folder).');
+          console.log(
+            'Backed up the EP01 access file next to the original (external secret folder).',
+          );
         }
         for (const o of owners) {
           const r = await importOwner(
@@ -85,7 +101,9 @@ async function main(): Promise<number> {
         const owners = rows.filter((u) => u.globalRole === 'OWNER');
         for (const u of owners) {
           const ident = await store.getIdentityByUserId(u.id);
-          console.log(`owner  ${ident ? maskUserId(ident.lineUserId) : '(no LINE identity)'}  ${u.id}`);
+          console.log(
+            `owner  ${ident ? maskUserId(ident.lineUserId) : '(no LINE identity)'}  ${u.id}`,
+          );
         }
         if (!owners.length) console.log('No active owner.');
         return 0;
@@ -103,14 +121,75 @@ async function main(): Promise<number> {
         }
         const r = await importOwner(
           store,
-          { lineUserId: ident.lineUserId, displayName: null, loginChannelId: ident.loginChannelId, allowAdditionalOwner: true },
+          {
+            lineUserId: ident.lineUserId,
+            displayName: null,
+            loginChannelId: ident.loginChannelId,
+            allowAdditionalOwner: true,
+          },
           new Date(),
         );
         console.log(`User ${maskUserId(ident.lineUserId)}: ${r.outcome}.`);
         return 0;
       }
+      case 'recent-signins': {
+        const since = Date.now() - BOOTSTRAP_WINDOW_MS;
+        const rows = (await store.listUsers({ limit: 50 })).filter(
+          (u) => (u.lastLoginAt?.getTime() ?? 0) >= since,
+        );
+        if (!rows.length)
+          console.log(
+            'No sign-ins in the last 30 minutes. Open FLOW from LINE first, then run this again.',
+          );
+        for (const u of rows) {
+          const ident = await store.getIdentityByUserId(u.id);
+          console.log(
+            `${u.id}  ${ident ? maskUserId(ident.lineUserId) : '(no LINE identity)'}  ${u.status}/${u.globalRole}  signed in ${u.lastLoginAt?.toISOString()}`,
+          );
+        }
+        console.log(
+          'Compare the masked LINE user ID with "Your user ID" in the LINE Developers console before bootstrapping.',
+        );
+        return 0;
+      }
+      case 'bootstrap-owner': {
+        const id = args.find((a) => UUID_RE.test(a));
+        if (!id || !args.includes('--confirm')) {
+          console.error(
+            'Usage: bootstrap-owner <user-uuid> --confirm   (only when no active owner exists)',
+          );
+          return 2;
+        }
+        const user = await store.getUser(id);
+        const ident = user ? await store.getIdentityByUserId(id) : null;
+        if (!user || !ident) {
+          console.error('User not found or has no verified LINE identity.');
+          return 1;
+        }
+        if ((user.lastLoginAt?.getTime() ?? 0) < Date.now() - BOOTSTRAP_WINDOW_MS) {
+          console.error(
+            'This account has not signed in through LINE in the last 30 minutes. Open FLOW from LINE, then retry.',
+          );
+          return 1;
+        }
+        // allowAdditionalOwner=false: refuses with OWNER_EXISTS if any active owner exists.
+        const r = await importOwner(
+          store,
+          {
+            lineUserId: ident.lineUserId,
+            displayName: null,
+            loginChannelId: ident.loginChannelId,
+            allowAdditionalOwner: false,
+          },
+          new Date(),
+        );
+        console.log(`User ${maskUserId(ident.lineUserId)}: ${r.outcome}. Reopen FLOW from LINE.`);
+        return 0;
+      }
       default:
-        console.error('Commands: import-ep01-owner [--allow-additional-owner] | owners | promote-owner <user-uuid> --confirm');
+        console.error(
+          'Commands: import-ep01-owner [--allow-additional-owner] | owners | recent-signins | bootstrap-owner <user-uuid> --confirm | promote-owner <user-uuid> --confirm',
+        );
         return 2;
     }
   } catch (err) {

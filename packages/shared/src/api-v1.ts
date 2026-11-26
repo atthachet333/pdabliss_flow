@@ -15,13 +15,16 @@ export const MAX_SHARED_USERS = 50;
 export const MAX_APPOINTMENT_DESTINATIONS = 10;
 export const MAX_ALL_DAY_SPAN_DAYS = 31;
 
-const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+const uuid = z
+  .string()
+  .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 const localDate = z.string().refine(isValidLocalDate, 'invalid date');
 const localTime = z.string().refine(isValidLocalTime, 'invalid time');
 const optionalText = (max: number) =>
   z
     .string()
     .max(max * 2)
+    // eslint-disable-next-line no-control-regex -- Preserve tabs and line breaks in multiline text.
     .transform((s) => s.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim())
     .refine((s) => [...s].length <= max, 'too long')
     .nullable()
@@ -54,6 +57,7 @@ export const appointmentInputSchema = z
     title: z
       .string()
       .max(APPOINTMENT_TITLE_MAX * 2)
+      // eslint-disable-next-line no-control-regex -- Strip C0 and DEL from single-line titles.
       .transform((s) => s.replace(/[\u0000-\u001f\u007f]/g, '').trim())
       .refine((s) => s.length > 0, 'required')
       .refine((s) => [...s].length <= APPOINTMENT_TITLE_MAX, 'too long'),
@@ -68,19 +72,28 @@ export const appointmentInputSchema = z
     notes: optionalText(APPOINTMENT_NOTES_MAX),
     visibility: z.enum(['PRIVATE', 'WORKSPACE', 'SELECTED']).default('PRIVATE'),
     sharedWithUserIds: z.array(uuid).max(MAX_SHARED_USERS).default([]),
-    destinations: z.array(appointmentDestinationSchema).max(MAX_APPOINTMENT_DESTINATIONS).default([]),
+    destinations: z
+      .array(appointmentDestinationSchema)
+      .max(MAX_APPOINTMENT_DESTINATIONS)
+      .default([]),
     confirmSensitive: z.boolean().default(false),
     reminders: z.array(reminderRuleSchema).max(MAX_REMINDER_RULES).default([]),
   })
   .strict()
   .superRefine((v, ctx) => {
-    if (!v.allDay && !v.startTime) ctx.addIssue({ code: 'custom', path: ['startTime'], message: 'required' });
+    if (!v.allDay && !v.startTime)
+      ctx.addIssue({ code: 'custom', path: ['startTime'], message: 'required' });
     const ids = v.destinations.map((d) => d.destinationId);
-    if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['destinations'], message: 'duplicate' });
+    if (new Set(ids).size !== ids.length)
+      ctx.addIssue({ code: 'custom', path: ['destinations'], message: 'duplicate' });
     if (new Set(v.sharedWithUserIds).size !== v.sharedWithUserIds.length)
       ctx.addIssue({ code: 'custom', path: ['sharedWithUserIds'], message: 'duplicate' });
     if (v.visibility !== 'SELECTED' && v.sharedWithUserIds.length)
-      ctx.addIssue({ code: 'custom', path: ['sharedWithUserIds'], message: 'only for SELECTED visibility' });
+      ctx.addIssue({
+        code: 'custom',
+        path: ['sharedWithUserIds'],
+        message: 'only for SELECTED visibility',
+      });
   });
 export type AppointmentInput = z.infer<typeof appointmentInputSchema>;
 export type AppointmentInputDraft = z.input<typeof appointmentInputSchema>;
@@ -158,7 +171,12 @@ export interface AppointmentDetailDto extends AppointmentSummaryDto {
   version: number;
   createdBy: { id: string; displayName: string };
   sharedWith: { id: string; displayName: string }[];
-  destinations: { id: string; label: string; kind: 'PRIVATE_USER' | 'GROUP'; contentPolicy: 'FULL' | 'PRIVACY_SAFE' }[];
+  destinations: {
+    id: string;
+    label: string;
+    kind: 'PRIVATE_USER' | 'GROUP';
+    contentPolicy: 'FULL' | 'PRIVACY_SAFE';
+  }[];
   reminders: ReminderDto[];
   canEdit: boolean;
   createdAt: string;

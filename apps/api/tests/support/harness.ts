@@ -4,11 +4,23 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { buildApp } from '../../src/app.js';
-import { ensureMember, ensurePersonalWorkspace, ensurePrivateDestination } from '../../src/domain/identity.js';
+import { buildApp, type BuildAppOptions } from '../../src/app.js';
+import {
+  ensureMember,
+  ensurePersonalWorkspace,
+  ensurePrivateDestination,
+} from '../../src/domain/identity.js';
 import type { IdTokenResult, IdTokenVerifier } from '../../src/line/id-token.js';
 import { MemoryStore } from '../../src/store/memory.js';
-import type { GlobalRole, Store, UserRow, UserStatus, WorkspaceKind, WorkspaceRole, WorkspaceRow } from '../../src/store/types.js';
+import type {
+  GlobalRole,
+  Store,
+  UserRow,
+  UserStatus,
+  WorkspaceKind,
+  WorkspaceRole,
+  WorkspaceRow,
+} from '../../src/store/types.js';
 import { integration, ORIGIN, testEnv } from '../helpers.js';
 
 export const lineId = (n: number) => `U${n.toString(16).padStart(32, '0')}`;
@@ -23,7 +35,10 @@ export const fakeVerifier: IdTokenVerifier = {
     if (token === 'tok:audience') return { ok: false, reason: 'wrong-audience' };
     if (token === 'tok:malformed') return { ok: false, reason: 'malformed' };
     if (!m) return { ok: false, reason: 'invalid' };
-    return { ok: true, identity: { sub: m[1] as string, name: m[2] as string, exp: 0, iat: 0, amr: [] } };
+    return {
+      ok: true,
+      identity: { sub: m[1] as string, name: m[2] as string, exp: 0, iat: 0, amr: [] },
+    };
   },
 };
 
@@ -38,14 +53,25 @@ export interface Harness {
 }
 
 export async function createHarness(
-  opts: { store?: Store; loginLimit?: number; apiLimit?: number; start?: number } = {},
+  opts: {
+    store?: Store;
+    loginLimit?: number;
+    apiLimit?: number;
+    start?: number;
+    publicBaseUrl?: string;
+    logStream?: BuildAppOptions['logStream'];
+  } = {},
 ): Promise<Harness> {
   const store = opts.store ?? new MemoryStore();
   const clock = { t: opts.start ?? Date.UTC(2026, 10, 26, 1, 0, 0) }; // 08:00 Bangkok
   const make = async () => {
     const app = buildApp({
-      env: testEnv(integration()),
+      env: {
+        ...testEnv(integration(opts.publicBaseUrl ? { publicBaseUrl: opts.publicBaseUrl } : {})),
+        ...(opts.logStream ? { logLevel: 'error' } : {}),
+      },
       store,
+      ...(opts.logStream ? { logStream: opts.logStream } : {}),
       deps: {
         verifier: fakeVerifier,
         messaging: null,
@@ -98,7 +124,8 @@ export class Client {
     });
     const raw = res.headers['set-cookie'];
     const first = Array.isArray(raw) ? raw[0] : raw;
-    if (typeof first === 'string' && !/Max-Age=0/.test(first)) this.cookie = first.split(';')[0] as string;
+    if (typeof first === 'string' && !/Max-Age=0/.test(first))
+      this.cookie = first.split(';')[0] as string;
     if (res.statusCode === 200) this.csrf = res.json().csrfToken as string;
     return res;
   }
@@ -106,7 +133,12 @@ export class Client {
   get(url: string, headers: Record<string, string> = {}) {
     return this.app().inject({ method: 'GET', url, headers: this.headers(headers) });
   }
-  send(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, body?: unknown, headers: Record<string, string> = {}) {
+  send(
+    method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+    url: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ) {
     return this.app().inject({
       method,
       url,
@@ -187,7 +219,13 @@ export async function seedWorkspace(
   return ws;
 }
 
-export async function seedGroup(store: Store, n: number, workspaceId: string | null, status: 'PENDING' | 'ACTIVE' = 'ACTIVE', audienceSize: number | null = 5) {
+export async function seedGroup(
+  store: Store,
+  n: number,
+  workspaceId: string | null,
+  status: 'PENDING' | 'ACTIVE' = 'ACTIVE',
+  audienceSize: number | null = 5,
+) {
   const now = new Date(Date.UTC(2026, 10, 1));
   const row = {
     id: randomUUID(),

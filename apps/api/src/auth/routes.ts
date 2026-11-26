@@ -16,7 +16,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { IntegrationConfig } from '../env.js';
 import { isAuthConfigured } from '../env.js';
-import { IdentityService } from '../domain/identity.js';
+import type { IdentityService } from '../domain/identity.js';
 import { type Actor, isOwner } from '../domain/policy.js';
 import { loadActor } from '../http/context.js';
 import {
@@ -47,7 +47,10 @@ export interface AuthDeps {
   webhookSummary: () => Promise<Record<string, unknown>>;
 }
 
-type ErrFn = (code: string, message: string) => { error: { code: string; message: string; requestId: string } };
+type ErrFn = (
+  code: string,
+  message: string,
+) => { error: { code: string; message: string; requestId: string } };
 
 const loginBody = z.object({ idToken: z.string().min(1).max(4096) }).strict();
 /** Logout carries no data: no body at all, or an empty JSON object. */
@@ -88,7 +91,10 @@ function sessionView(actor: Actor, csrfToken: string, expiresAt: Date) {
 
 export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
   const ready =
-    isAuthConfigured(deps.config) && deps.verifier !== null && deps.sessions !== null && deps.identity !== null;
+    isAuthConfigured(deps.config) &&
+    deps.verifier !== null &&
+    deps.sessions !== null &&
+    deps.identity !== null;
 
   const notConfigured = (reply: FastifyReply, err: ErrFn) =>
     reply.code(503).send(err('AUTH_NOT_CONFIGURED', 'Authentication is not configured'));
@@ -98,7 +104,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
     if (originAllowed(request, deps.allowedOrigins)) return;
     request.log.info({ outcome: 'origin-denied' }, 'auth.origin');
     return reply.code(403).send({
-      error: { code: 'ORIGIN_DENIED', message: 'Request origin is not allowed', requestId: request.id },
+      error: {
+        code: 'ORIGIN_DENIED',
+        message: 'Request origin is not allowed',
+        requestId: request.id,
+      },
     });
   };
 
@@ -111,7 +121,10 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
     if (!limiter) return false;
     const wait = await limiter.check(key);
     if (wait <= 0) return false;
-    await reply.header('retry-after', String(wait)).code(429).send(err('RATE_LIMITED', 'Too many requests'));
+    await reply
+      .header('retry-after', String(wait))
+      .code(429)
+      .send(err('RATE_LIMITED', 'Too many requests'));
     return true;
   };
 
@@ -124,9 +137,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
     const err: ErrFn = (code, message) => ({ error: { code, message, requestId: request.id } });
     if (!ready || !deps.verifier || !deps.sessions || !deps.identity || !deps.config)
       return notConfigured(reply, err);
-    if (await limited(deps.loginLimiter, `login:${clientAddress(request)}`, reply, err)) return reply;
+    if (await limited(deps.loginLimiter, `login:${clientAddress(request)}`, reply, err))
+      return reply;
     const parsed = loginBody.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send(err('VALIDATION_ERROR', 'Request validation failed'));
+    if (!parsed.success)
+      return reply.code(400).send(err('VALIDATION_ERROR', 'Request validation failed'));
 
     // Session fixation defence: any session presented with a login attempt is ended.
     await deps.sessions.end(readSessionCookie(request, deps.cookie) ?? null, 'REPLACED');
@@ -136,8 +151,11 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
       request.log.info({ outcome: `id-token-${result.reason}` }, 'auth.login');
       clearSessionCookie(reply, deps.cookie);
       if (result.reason === 'upstream')
-        return reply.code(503).send(err('LINE_UNAVAILABLE', 'LINE verification is temporarily unavailable'));
-      if (result.reason === 'expired') return reply.code(401).send(err('ID_TOKEN_EXPIRED', 'Login has expired'));
+        return reply
+          .code(503)
+          .send(err('LINE_UNAVAILABLE', 'LINE verification is temporarily unavailable'));
+      if (result.reason === 'expired')
+        return reply.code(401).send(err('ID_TOKEN_EXPIRED', 'Login has expired'));
       return reply.code(401).send(err('ID_TOKEN_INVALID', 'Login could not be verified'));
     }
     const user = await deps.identity.upsertFromVerifiedLogin(
@@ -148,7 +166,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
     const actor = (await loadActor(deps.store, user.id)) as Actor;
     const { sessionId, session } = await deps.sessions.create(user.id);
     const expiresAt = deps.sessions.expiresAt(session);
-    setSessionCookie(reply, deps.cookie, sessionId, (expiresAt.getTime() - session.createdAt.getTime()) / 1000);
+    setSessionCookie(
+      reply,
+      deps.cookie,
+      sessionId,
+      (expiresAt.getTime() - session.createdAt.getTime()) / 1000,
+    );
     request.log.info({ outcome: accountState(user) }, 'auth.login');
     return reply.code(200).send(sessionView(actor, deps.sessions.csrfFor(sessionId), expiresAt));
   });
@@ -156,12 +179,18 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
   app.get('/api/auth/session', async (request, reply) => {
     const err: ErrFn = (code, message) => ({ error: { code, message, requestId: request.id } });
     if (!ready || !deps.sessions) return notConfigured(reply, err);
-    if (await limited(deps.sessionLimiter, `session:${clientAddress(request)}`, reply, err)) return reply;
+    if (await limited(deps.sessionLimiter, `session:${clientAddress(request)}`, reply, err))
+      return reply;
     const cookie = readSessionCookie(request, deps.cookie) ?? null;
     const resolved = await deps.sessions.resolve(cookie);
     if (resolved.status !== 'active') {
       if (resolved.status !== 'none') clearSessionCookie(reply, deps.cookie);
-      const state = resolved.status === 'expired' ? 'expired' : resolved.status === 'revoked' ? 'revoked' : 'unauthenticated';
+      const state =
+        resolved.status === 'expired'
+          ? 'expired'
+          : resolved.status === 'revoked'
+            ? 'revoked'
+            : 'unauthenticated';
       return reply.code(401).send({ state });
     }
     const actor = await loadActor(deps.store, resolved.session.userId);
@@ -171,7 +200,13 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
     }
     return reply
       .code(200)
-      .send(sessionView(actor, deps.sessions.csrfFor(resolved.sessionId), deps.sessions.expiresAt(resolved.session)));
+      .send(
+        sessionView(
+          actor,
+          deps.sessions.csrfFor(resolved.sessionId),
+          deps.sessions.expiresAt(resolved.session),
+        ),
+      );
   });
 
   app.post('/api/auth/logout', { onRequest: requireAllowedOrigin }, async (request, reply) => {
@@ -183,7 +218,12 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
     const resolved = await deps.sessions.resolve(cookie, { touch: false });
     if (resolved.status === 'active') {
       const header = request.headers['x-flow-csrf'];
-      if (!safeEqual(typeof header === 'string' ? header : undefined, deps.sessions.csrfFor(resolved.sessionId)))
+      if (
+        !safeEqual(
+          typeof header === 'string' ? header : undefined,
+          deps.sessions.csrfFor(resolved.sessionId),
+        )
+      )
         return reply.code(403).send(err('CSRF_INVALID', 'Request could not be verified'));
       await deps.sessions.end(cookie, 'LOGGED_OUT');
     }
@@ -197,27 +237,33 @@ export function registerAuthRoutes(app: FastifyInstance, deps: AuthDeps): void {
     const resolved = await deps.sessions.resolve(readSessionCookie(request, deps.cookie) ?? null);
     if (resolved.status !== 'active') return reply.code(401).send({ state: 'unauthenticated' });
     const actor = await loadActor(deps.store, resolved.session.userId);
-    if (!actor || !isOwner(actor)) return reply.code(403).send(err('FORBIDDEN', 'Owner access is required'));
+    if (!actor || !isOwner(actor))
+      return reply.code(403).send(err('FORBIDDEN', 'Owner access is required'));
     if (!deps.messaging)
-      return reply.code(503).send(err('LINE_NOT_CONFIGURED', 'Messaging API access token is not configured'));
-    try {
-      const [bot, quota, consumption] = await Promise.all([
-        deps.messaging.getBotInfo(),
-        deps.messaging.getQuota(),
-        deps.messaging.getConsumption(),
-      ]);
-      return reply.code(200).send({
-        bot: { basicId: bot.basicId, displayName: bot.displayName },
-        quota: { type: quota.type, value: quota.value ?? null },
-        consumption: { totalUsage: consumption.totalUsage },
-        webhook: await deps.webhookSummary(),
-        outboundMessaging: 'disabled',
-        checkedAt: new Date().toISOString(),
-      });
-    } catch (e) {
+      return reply
+        .code(503)
+        .send(err('LINE_NOT_CONFIGURED', 'Messaging API access token is not configured'));
+    const stats = await Promise.all([
+      deps.messaging.getBotInfo(),
+      deps.messaging.getQuota(),
+      deps.messaging.getConsumption(),
+    ]).catch((e: unknown) => {
       const kind = e instanceof LineApiError ? e.kind : 'unexpected';
       request.log.warn({ outcome: `line-api-${kind}` }, 'line.status');
-      return reply.code(502).send(err(`LINE_API_${kind.toUpperCase().replace(/-/g, '_')}`, 'LINE API request failed'));
-    }
+      reply
+        .code(502)
+        .send(err(`LINE_API_${kind.toUpperCase().replace(/-/g, '_')}`, 'LINE API request failed'));
+      return null;
+    });
+    if (!stats) return reply;
+    const [bot, quota, consumption] = stats;
+    return reply.code(200).send({
+      bot: { basicId: bot.basicId, displayName: bot.displayName },
+      quota: { type: quota.type, value: quota.value ?? null },
+      consumption: { totalUsage: consumption.totalUsage },
+      webhook: await deps.webhookSummary(),
+      outboundMessaging: 'disabled',
+      checkedAt: new Date().toISOString(),
+    });
   });
 }

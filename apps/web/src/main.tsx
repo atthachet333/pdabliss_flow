@@ -5,6 +5,7 @@ import '@fontsource/ibm-plex-sans-thai/700.css';
 import '@flow/design-system/tokens.css';
 import '@flow/design-system/components.css';
 import './app.css';
+import './app/app-shell.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';

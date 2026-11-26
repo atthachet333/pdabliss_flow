@@ -1,5 +1,5 @@
 /**
- * Same-origin client for the FLOW auth API.
+ * Same-origin client for the FLOW API (auth + /api/v1).
  * - Session lives in an HttpOnly cookie (JavaScript cannot read it).
  * - The CSRF token is kept ONLY in memory for this page lifetime.
  * - The LINE ID token is sent once, in a POST body, and never stored.
@@ -13,17 +13,47 @@ import {
   type LineStatus,
   parseRetryAfter,
   type SessionResult,
+  type SessionUser,
+  type SignedIn,
 } from './types';
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 interface SessionBody {
   state?: string;
-  user?: { displayName: string | null; role: 'owner' | 'tester' };
+  user?: SessionUser;
   session?: { expiresAt: string };
   csrfToken?: string;
-  enrollmentRef?: string | null;
   error?: { code?: string };
+}
+
+const ACCOUNT_STATES = new Set(['approved', 'new', 'pending', 'rejected', 'suspended', 'revoked']);
+
+/** A 200 session body → typed result (account "revoked" is distinct from a revoked session). */
+function signedIn(body: SessionBody): SignedIn | null {
+  if (!body.state || !ACCOUNT_STATES.has(body.state) || !body.user || !body.session) return null;
+  const state = body.state === 'revoked' ? 'account-revoked' : (body.state as SignedIn['state']);
+  return { state, user: body.user, expiresAt: body.session.expiresAt };
+}
+
+/** Error from /api/v1 with the server's code (never a raw body). */
+export class ApiRequestError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    public readonly details: Record<string, unknown> | undefined = undefined,
+  ) {
+    super(code);
+    this.name = 'ApiRequestError';
+  }
+}
+
+export interface RequestOptions {
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  body?: unknown;
+  /** Required by the server for appointment creation (safe retries, no duplicates). */
+  idempotencyKey?: string;
+  signal?: AbortSignal;
 }
 
 export class FlowApiClient implements AuthApiPort {
@@ -75,11 +105,37 @@ export class FlowApiClient implements AuthApiPort {
     };
   }
 
+  /**
+   * JSON request to /api/v1. Mutations carry the in-memory CSRF token. Network failures throw
+   * ApiNetworkError and are NEVER queued or replayed automatically (no silent offline writes).
+   */
+  async request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+    const method = opts.method ?? 'GET';
+    const headers: Record<string, string> = {};
+    if (opts.body !== undefined) headers['content-type'] = 'application/json';
+    if (method !== 'GET' && this.csrfToken) headers['x-flow-csrf'] = this.csrfToken;
+    if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
+    const { status, body } = await this.call(`/api/v1${path}`, {
+      method,
+      headers,
+      ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    if (status >= 200 && status < 300) return body as T;
+    const err = (body as { error?: { code?: string; details?: Record<string, unknown> } }).error;
+    throw new ApiRequestError(status, err?.code ?? `HTTP_${status}`, err?.details);
+  }
+
+  hasCsrf(): boolean {
+    return this.csrfToken !== null;
+  }
+
   async getSession(): Promise<SessionResult> {
     const { status, body } = await this.call('/api/auth/session');
-    if (status === 200 && body.state === 'approved' && body.user && body.session) {
+    const live = status === 200 ? signedIn(body) : null;
+    if (live) {
       this.csrfToken = body.csrfToken ?? null;
-      return { state: 'approved', user: body.user, expiresAt: body.session.expiresAt };
+      return live;
     }
     this.csrfToken = null;
     if (
@@ -107,14 +163,12 @@ export class FlowApiClient implements AuthApiPort {
       throw err;
     }
     const { status, body } = response;
-    if (status === 200 && body.state === 'approved' && body.user && body.session) {
+    const live = status === 200 ? signedIn(body) : null;
+    if (live) {
       this.csrfToken = body.csrfToken ?? null;
-      return { state: 'approved', user: body.user, expiresAt: body.session.expiresAt };
+      return live;
     }
     this.csrfToken = null;
-    if (status === 403 && body.state === 'not-approved')
-      return { state: 'not-approved', enrollmentRef: body.enrollmentRef ?? null };
-    if (status === 403 && body.state === 'revoked') return { state: 'revoked' };
     const code = body.error?.code;
     if (code === 'ID_TOKEN_EXPIRED') return { state: 'token-expired' };
     if (code === 'ID_TOKEN_INVALID') return { state: 'token-invalid' };

@@ -477,7 +477,9 @@ function RichMenuSection() {
             <caption>การแมปพื้นที่แตะ → หน้า LIFF (ภาพ 2500×1686)</caption>
             <thead>
               <tr>
-                <th scope="col">พื้นที่</th>
+                <th scope="col" style={{ whiteSpace: 'nowrap' }}>
+                  พื้นที่
+                </th>
                 <th scope="col">คำสั่ง</th>
                 <th scope="col">เส้นทาง</th>
                 <th scope="col">ขอบเขต (px)</th>

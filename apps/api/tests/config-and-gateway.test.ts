@@ -261,7 +261,12 @@ describe('development gateway', () => {
       '/groups/0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b',
     ])
       assert.equal((await hit('GET', p)).status, 200, p);
-    for (const p of ['/invite/short', '/groups/not-a-uuid', '/owner/secret', '/appointments/x/edit'])
+    for (const p of [
+      '/invite/short',
+      '/groups/not-a-uuid',
+      '/owner/secret',
+      '/appointments/x/edit',
+    ])
       assert.equal((await hit('GET', p)).status, 404, p);
   });
 });

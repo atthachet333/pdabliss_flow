@@ -144,21 +144,32 @@ export class MemoryStore implements Store {
     return u ? clone(u) : null;
   }
   async getUsers(ids: string[]) {
-    return ids.map((id) => this.s.users.get(id)).filter((u): u is UserRow => !!u).map(clone);
+    return ids
+      .map((id) => this.s.users.get(id))
+      .filter((u): u is UserRow => !!u)
+      .map(clone);
   }
   async updateUser(
     id: string,
-    patch: Partial<Pick<UserRow, 'displayName' | 'status' | 'globalRole' | 'lastLoginAt' | 'statusChangedAt'>>,
+    patch: Partial<
+      Pick<UserRow, 'displayName' | 'status' | 'globalRole' | 'lastLoginAt' | 'statusChangedAt'>
+    >,
     opts: { now: Date; expectAuthzVersion?: number; bumpAuthz?: boolean },
   ) {
     const u = this.s.users.get(id);
     if (!u) return null;
-    if (opts.expectAuthzVersion !== undefined && u.authzVersion !== opts.expectAuthzVersion) return null;
+    if (opts.expectAuthzVersion !== undefined && u.authzVersion !== opts.expectAuthzVersion)
+      return null;
     Object.assign(u, patch, { updatedAt: opts.now });
     if (opts.bumpAuthz) u.authzVersion += 1;
     return clone(u);
   }
-  async listUsers(q: { statuses?: UserRow['status'][]; text?: string; limit: number; offset?: number }) {
+  async listUsers(q: {
+    statuses?: UserRow['status'][];
+    text?: string;
+    limit: number;
+    offset?: number;
+  }) {
     const t = q.text?.toLowerCase();
     return [...this.s.users.values()]
       .filter((u) => !q.statuses || q.statuses.includes(u.status))
@@ -233,7 +244,12 @@ export class MemoryStore implements Store {
   }
   async purgeRateLimits(now: Date) {
     let n = 0;
-    for (const [k, v] of this.s.rate) if (v.windowEnd <= now) (this.s.rate.delete(k), (n += 1));
+    for (const [k, v] of this.s.rate) {
+      if (v.windowEnd <= now) {
+        this.s.rate.delete(k);
+        n += 1;
+      }
+    }
     return n;
   }
 
@@ -245,7 +261,12 @@ export class MemoryStore implements Store {
   }
   async purgeWebhookEvents(now: Date) {
     let n = 0;
-    for (const [k, v] of this.s.webhook) if (v.expiresAt <= now) (this.s.webhook.delete(k), (n += 1));
+    for (const [k, v] of this.s.webhook) {
+      if (v.expiresAt <= now) {
+        this.s.webhook.delete(k);
+        n += 1;
+      }
+    }
     return n;
   }
 
@@ -253,7 +274,8 @@ export class MemoryStore implements Store {
   async createAccessRequest(row: AccessRequestRow) {
     if (row.status === 'PENDING') {
       for (const r of this.s.requests.values())
-        if (r.userId === row.userId && r.status === 'PENDING') throw new StoreConflictError('openKey');
+        if (r.userId === row.userId && r.status === 'PENDING')
+          throw new StoreConflictError('openKey');
     }
     this.s.requests.set(row.id, clone(row));
   }
@@ -266,15 +288,23 @@ export class MemoryStore implements Store {
       if (r.userId === userId && r.status === 'PENDING') return clone(r);
     return null;
   }
-  async listAccessRequests(q: { statuses?: AccessRequestRow['status'][]; userId?: string; limit: number }) {
+  async listAccessRequests(q: {
+    statuses?: AccessRequestRow['status'][];
+    userId?: string;
+    limit: number;
+  }) {
     return [...this.s.requests.values()]
-      .filter((r) => (!q.statuses || q.statuses.includes(r.status)) && (!q.userId || r.userId === q.userId))
+      .filter(
+        (r) =>
+          (!q.statuses || q.statuses.includes(r.status)) && (!q.userId || r.userId === q.userId),
+      )
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
       .slice(0, q.limit)
       .map(clone);
   }
   async countAccessRequests(q: { statuses?: AccessRequestRow['status'][] }) {
-    return [...this.s.requests.values()].filter((r) => !q.statuses || q.statuses.includes(r.status)).length;
+    return [...this.s.requests.values()].filter((r) => !q.statuses || q.statuses.includes(r.status))
+      .length;
   }
   async decideAccessRequest(
     id: string,
@@ -332,7 +362,8 @@ export class MemoryStore implements Store {
   async createWorkspace(row: WorkspaceRow) {
     if (row.personalOwnerId) {
       for (const w of this.s.workspaces.values())
-        if (w.personalOwnerId === row.personalOwnerId) throw new StoreConflictError('personalOwnerId');
+        if (w.personalOwnerId === row.personalOwnerId)
+          throw new StoreConflictError('personalOwnerId');
     }
     this.s.workspaces.set(row.id, clone(row));
   }
@@ -346,7 +377,9 @@ export class MemoryStore implements Store {
   }
   async listWorkspaces(q: { ids?: string[]; statuses?: WorkspaceRow['status'][]; limit: number }) {
     return [...this.s.workspaces.values()]
-      .filter((w) => (!q.ids || q.ids.includes(w.id)) && (!q.statuses || q.statuses.includes(w.status)))
+      .filter(
+        (w) => (!q.ids || q.ids.includes(w.id)) && (!q.statuses || q.statuses.includes(w.status)),
+      )
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))
       .slice(0, q.limit)
       .map(clone);
@@ -365,7 +398,12 @@ export class MemoryStore implements Store {
   async upsertMember(row: MemberRow) {
     for (const m of this.s.members.values()) {
       if (m.workspaceId === row.workspaceId && m.userId === row.userId) {
-        Object.assign(m, { role: row.role, status: row.status, updatedAt: row.updatedAt, addedByUserId: row.addedByUserId });
+        Object.assign(m, {
+          role: row.role,
+          status: row.status,
+          updatedAt: row.updatedAt,
+          addedByUserId: row.addedByUserId,
+        });
         return clone(m);
       }
     }
@@ -410,7 +448,8 @@ export class MemoryStore implements Store {
     return d ? clone(d) : null;
   }
   async getDestinationByTarget(lineTargetId: string) {
-    for (const d of this.s.destinations.values()) if (d.lineTargetId === lineTargetId) return clone(d);
+    for (const d of this.s.destinations.values())
+      if (d.lineTargetId === lineTargetId) return clone(d);
     return null;
   }
   async getPrivateDestination(userId: string) {
@@ -427,7 +466,9 @@ export class MemoryStore implements Store {
   }
   async updateDestination(
     id: string,
-    patch: Partial<Pick<DestinationRow, 'label' | 'status' | 'workspaceId' | 'audienceSize' | 'lastEventAt'>>,
+    patch: Partial<
+      Pick<DestinationRow, 'label' | 'status' | 'workspaceId' | 'audienceSize' | 'lastEventAt'>
+    >,
     now: Date,
   ) {
     const d = this.s.destinations.get(id);
@@ -456,7 +497,8 @@ export class MemoryStore implements Store {
   }
   async createDestinationGrant(row: DestinationGrantRow) {
     for (const g of this.s.grants.values())
-      if (g.destinationId === row.destinationId && g.userId === row.userId) throw new StoreConflictError('grant');
+      if (g.destinationId === row.destinationId && g.userId === row.userId)
+        throw new StoreConflictError('grant');
     this.s.grants.set(row.id, clone(row));
   }
   async deleteDestinationGrant(destinationId: string, userId: string) {
@@ -466,7 +508,11 @@ export class MemoryStore implements Store {
   }
   async listDestinationGrants(q: { destinationId?: string; userId?: string }) {
     return [...this.s.grants.values()]
-      .filter((g) => (!q.destinationId || g.destinationId === q.destinationId) && (!q.userId || g.userId === q.userId))
+      .filter(
+        (g) =>
+          (!q.destinationId || g.destinationId === q.destinationId) &&
+          (!q.userId || g.userId === q.userId),
+      )
       .map(clone);
   }
 
@@ -475,7 +521,9 @@ export class MemoryStore implements Store {
     return {
       appointment: clone(a),
       accessGrants: [...this.s.access.values()].filter((g) => g.appointmentId === a.id).map(clone),
-      destinations: [...this.s.apptDest.values()].filter((d) => d.appointmentId === a.id).map(clone),
+      destinations: [...this.s.apptDest.values()]
+        .filter((d) => d.appointmentId === a.id)
+        .map(clone),
       reminderRules: [...this.s.rules.values()]
         .filter((r) => r.appointmentId === a.id)
         .sort((x, y) => x.position - y.position)
@@ -497,7 +545,8 @@ export class MemoryStore implements Store {
       const seen = new Set<string>();
       for (const d of b.destinations) {
         if (seen.has(d.destinationId)) throw new StoreConflictError('appointment_destinations');
-        if (!this.s.destinations.has(d.destinationId)) throw new StoreConflictError('destination.fk');
+        if (!this.s.destinations.has(d.destinationId))
+          throw new StoreConflictError('destination.fk');
         seen.add(d.destinationId);
         this.s.apptDest.set(d.id, clone(d));
       }
@@ -508,7 +557,8 @@ export class MemoryStore implements Store {
     }
   }
   async createAppointment(b: AppointmentBundle) {
-    if (!this.s.workspaces.has(b.appointment.workspaceId)) throw new StoreConflictError('workspace.fk');
+    if (!this.s.workspaces.has(b.appointment.workspaceId))
+      throw new StoreConflictError('workspace.fk');
     if (this.s.appointments.has(b.appointment.id)) throw new StoreConflictError('appointment.id');
     this.s.appointments.set(b.appointment.id, clone(b.appointment));
     this.replaceChildren(b.appointment.id, b);
@@ -534,9 +584,13 @@ export class MemoryStore implements Store {
     return true;
   }
   async listAppointments(q: AppointmentQuery) {
+    if (!q.viewerUserId || !Array.isArray(q.workspaceIds))
+      throw new Error('listAppointments requires a viewer and workspace scope');
     const ws = new Set(q.workspaceIds);
     const granted = new Set(
-      [...this.s.access.values()].filter((g) => g.userId === q.viewerUserId).map((g) => g.appointmentId),
+      [...this.s.access.values()]
+        .filter((g) => g.userId === q.viewerUserId)
+        .map((g) => g.appointmentId),
     );
     const t = q.text?.toLowerCase();
     const dir = q.order === 'desc' ? -1 : 1;
@@ -589,8 +643,19 @@ export class MemoryStore implements Store {
     return null;
   }
   async createIdempotency(row: IdempotencyRow) {
-    if (await this.getIdempotency(row.userId, row.scope, row.key)) throw new StoreConflictError('idempotency');
+    if (await this.getIdempotency(row.userId, row.scope, row.key))
+      throw new StoreConflictError('idempotency');
     this.s.idem.set(row.id, clone(row));
+  }
+  async purgeIdempotency(now: Date) {
+    let n = 0;
+    for (const [k, v] of this.s.idem) {
+      if (v.expiresAt <= now) {
+        this.s.idem.delete(k);
+        n += 1;
+      }
+    }
+    return n;
   }
 
   // ───────── preferences
@@ -606,7 +671,12 @@ export class MemoryStore implements Store {
   async appendAudit(row: AuditRow) {
     this.s.audit.push(clone(row));
   }
-  async listAudit(q: { workspaceId?: string; resourceTypes?: string[]; limit: number; offset?: number }) {
+  async listAudit(q: {
+    workspaceId?: string;
+    resourceTypes?: string[];
+    limit: number;
+    offset?: number;
+  }) {
     return this.s.audit
       .filter(
         (a) =>

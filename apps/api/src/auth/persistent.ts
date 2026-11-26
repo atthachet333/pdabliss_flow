@@ -72,7 +72,10 @@ export class PersistentSessions {
     return { sessionId, session };
   }
 
-  async resolve(sessionId: string | null, opts: { touch?: boolean } = {}): Promise<ResolvedSession> {
+  async resolve(
+    sessionId: string | null,
+    opts: { touch?: boolean } = {},
+  ): Promise<ResolvedSession> {
     if (!sessionId || sessionId.length > 128) return { status: 'none' };
     const s = await this.store.getSessionByKeyHash(this.keyFor(sessionId));
     if (!s) return { status: 'none' };
@@ -93,7 +96,10 @@ export class PersistentSessions {
     return { status: 'active', session: s, sessionId };
   }
 
-  async end(sessionId: string | null, reason: 'LOGGED_OUT' | 'REPLACED' | 'REVOKED'): Promise<void> {
+  async end(
+    sessionId: string | null,
+    reason: 'LOGGED_OUT' | 'REPLACED' | 'REVOKED',
+  ): Promise<void> {
     if (!sessionId || sessionId.length > 128) return;
     const s = await this.store.getSessionByKeyHash(this.keyFor(sessionId));
     if (s && !s.endedAt) await this.store.endSession(s.id, reason, this.clock());

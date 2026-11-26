@@ -8,16 +8,31 @@
  *    request that an owner/admin approves (no direct activation in EP02).
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { type Clock, ApiError, badRequest, conflictError, forbidden, newId, notFound } from '../core/context.js';
-import { type InvitationRow, type Store, StoreConflictError, type WorkspaceRole } from '../store/types.js';
+import {
+  type Clock,
+  ApiError,
+  badRequest,
+  conflictError,
+  forbidden,
+  newId,
+  notFound,
+} from '../core/context.js';
+import {
+  type InvitationRow,
+  type Store,
+  StoreConflictError,
+  type WorkspaceRole,
+} from '../store/types.js';
 import { audit } from './audit.js';
 import { type Actor, canGlobal } from './policy.js';
+import { retryWriteConflict } from './transaction.js';
 
 export const INVITATION_EXPIRY_HOURS = [1, 24, 72, 168] as const;
 export const DEFAULT_INVITATION_HOURS = 24;
 export const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
-export const hashToken = (token: string): Uint8Array => createHash('sha256').update(token, 'utf8').digest();
+export const hashToken = (token: string): Uint8Array =>
+  createHash('sha256').update(token, 'utf8').digest();
 
 export type InvitationState = 'valid' | 'expired' | 'revoked' | 'used' | 'invalid';
 
@@ -37,12 +52,19 @@ export class InvitationService {
 
   async create(
     admin: Actor,
-    input: { workspaceId: string; role: WorkspaceRole; expiresInHours: number; note: string | null },
+    input: {
+      workspaceId: string;
+      role: WorkspaceRole;
+      expiresInHours: number;
+      note: string | null;
+    },
   ): Promise<{ invitation: InvitationRow; token: string }> {
     if (!canGlobal(admin, 'invitations.manage')) throw forbidden();
-    if (!(INVITATION_EXPIRY_HOURS as readonly number[]).includes(input.expiresInHours)) throw badRequest('INVALID_EXPIRY');
+    if (!(INVITATION_EXPIRY_HOURS as readonly number[]).includes(input.expiresInHours))
+      throw badRequest('INVALID_EXPIRY');
     const ws = await this.store.getWorkspace(input.workspaceId);
-    if (!ws || ws.status !== 'ACTIVE' || ws.kind === 'PERSONAL') throw badRequest('INVALID_WORKSPACE');
+    if (!ws || ws.status !== 'ACTIVE' || ws.kind === 'PERSONAL')
+      throw badRequest('INVALID_WORKSPACE');
     const now = this.clock();
     const token = randomBytes(32).toString('base64url');
     const invitation: InvitationRow = {
@@ -93,7 +115,9 @@ export class InvitationService {
   }
 
   /** Read-only check (does not consume). Reveals only the workspace name and role for a valid token. */
-  async inspect(token: string): Promise<{ state: InvitationState; workspaceName?: string; role?: WorkspaceRole }> {
+  async inspect(
+    token: string,
+  ): Promise<{ state: InvitationState; workspaceName?: string; role?: WorkspaceRole }> {
     if (!TOKEN_RE.test(token)) return { state: 'invalid' };
     const inv = await this.store.getInvitationByTokenHash(hashToken(token));
     const state = invitationState(inv, this.clock());
@@ -110,19 +134,24 @@ export class InvitationService {
   async redeem(actor: Actor, token: string): Promise<{ state: 'requested' | 'already-member' }> {
     const blocked = ['REJECTED', 'SUSPENDED', 'REVOKED'];
     if (blocked.includes(actor.user.status)) throw forbidden(`ACCOUNT_${actor.user.status}`);
-    if (!TOKEN_RE.test(token)) throw new ApiError(404, 'INVITATION_INVALID', 'Invitation is not valid');
-    const now = this.clock();
-    return this.store.transaction(async (tx) => {
+    if (!TOKEN_RE.test(token))
+      throw new ApiError(404, 'INVITATION_INVALID', 'Invitation is not valid');
+    return retryWriteConflict(this.store, async (tx) => {
+      const now = this.clock();
       const inv = await tx.getInvitationByTokenHash(hashToken(token));
       const state = invitationState(inv, now);
       if (state !== 'valid' || !inv) {
-        const code = { invalid: 'INVITATION_INVALID', expired: 'INVITATION_EXPIRED', revoked: 'INVITATION_REVOKED', used: 'INVITATION_USED' }[
-          state as Exclude<InvitationState, 'valid'>
-        ];
+        const code = {
+          invalid: 'INVITATION_INVALID',
+          expired: 'INVITATION_EXPIRED',
+          revoked: 'INVITATION_REVOKED',
+          used: 'INVITATION_USED',
+        }[state as Exclude<InvitationState, 'valid'>];
         throw new ApiError(state === 'invalid' ? 404 : 410, code, 'Invitation cannot be used');
       }
       const member = await tx.getMember(inv.workspaceId, actor.user.id);
-      if (actor.user.status === 'ACTIVE' && member?.status === 'ACTIVE') return { state: 'already-member' as const };
+      if (actor.user.status === 'ACTIVE' && member?.status === 'ACTIVE')
+        return { state: 'already-member' as const };
       if (await tx.getOpenAccessRequest(actor.user.id)) throw conflictError('ALREADY_PENDING');
       if (!(await tx.redeemInvitation(inv.id, actor.user.id, now)))
         throw new ApiError(410, 'INVITATION_USED', 'Invitation cannot be used');
@@ -144,7 +173,11 @@ export class InvitationService {
         throw err;
       }
       if (actor.user.status === 'NEW')
-        await tx.updateUser(actor.user.id, { status: 'PENDING', statusChangedAt: now }, { now, bumpAuthz: true });
+        await tx.updateUser(
+          actor.user.id,
+          { status: 'PENDING', statusChangedAt: now },
+          { now, bumpAuthz: true },
+        );
       await audit(tx, {
         actorUserId: actor.user.id,
         action: 'invitation.redeemed',

@@ -1052,7 +1052,7 @@ code {
 .today__tabbar {
   margin: 0 calc(-1 * var(--sp-4));
 }
-.f-tabbar span {
+.f-tabbar > span {
   display: grid;
   justify-items: center;
   gap: 2px;
@@ -1063,15 +1063,15 @@ code {
   color: var(--ink-muted);
   line-height: 1.4;
 }
-.f-tabbar span svg {
+.f-tabbar > span svg {
   width: 22px;
   height: 22px;
 }
-.f-tabbar span[data-current='true'] {
+.f-tabbar > span[data-current='true'] {
   color: var(--flow-forest);
   font-weight: 700;
 }
-.f-tabbar span[data-current='true'] svg {
+.f-tabbar > span[data-current='true'] svg {
   color: var(--flow-emerald);
 }
 
@@ -1761,11 +1761,16 @@ code {
 .auth-owner {
   width: 100%;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-3);
   justify-items: start;
   text-align: left;
   border-top: 1px solid var(--line);
   padding-top: var(--sp-4);
+}
+.auth-owner .f-btn {
+  max-width: 100%;
+  white-space: normal;
 }
 .auth-owner__title {
   font-weight: 600;

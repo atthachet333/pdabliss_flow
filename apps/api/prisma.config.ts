@@ -11,6 +11,8 @@ export default defineConfig({
   migrations: { path: 'prisma/migrations' },
   datasource: {
     url: process.env.FLOW_PRISMA_URL ?? 'mysql://unset@127.0.0.1:1/unset',
-    ...(process.env.FLOW_PRISMA_SHADOW_URL ? { shadowDatabaseUrl: process.env.FLOW_PRISMA_SHADOW_URL } : {}),
+    ...(process.env.FLOW_PRISMA_SHADOW_URL
+      ? { shadowDatabaseUrl: process.env.FLOW_PRISMA_SHADOW_URL }
+      : {}),
   },
 });

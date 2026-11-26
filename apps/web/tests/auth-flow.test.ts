@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { FlowApiClient } from '../src/auth/api-client.js';
+import { ApiRequestError, FlowApiClient } from '../src/auth/api-client.js';
 import {
   AuthController,
   type GuardStorage,
@@ -18,16 +18,41 @@ import {
   type ExchangeResult,
   type LiffPort,
   type SessionResult,
+  type SessionUser,
 } from '../src/auth/types.js';
 
 const TOKEN = 'synthetic.id-token.for-tests';
 const LIFF_ID = '1000000001-AbCdEfGh';
 const NOW = Date.UTC(2026, 10, 26, 4, 0, 0);
+const SIM_USER: SessionUser = {
+  id: '00000000-0000-4000-8000-000000000001',
+  displayName: 'ผู้ทดสอบ (จำลอง)',
+  status: 'ACTIVE',
+  globalRole: 'OWNER',
+};
 const APPROVED = {
   state: 'approved' as const,
-  user: { displayName: 'ผู้ทดสอบ (จำลอง)', role: 'owner' as const },
+  user: SIM_USER,
   expiresAt: '2026-11-26T12:00:00.000Z',
 };
+const limited = (state: 'new' | 'pending' | 'rejected' | 'suspended' | 'account-revoked') => ({
+  state,
+  user: {
+    ...SIM_USER,
+    globalRole: 'USER' as const,
+    status: (
+      {
+        new: 'NEW',
+        pending: 'PENDING',
+        rejected: 'REJECTED',
+        suspended: 'SUSPENDED',
+        'account-revoked': 'REVOKED',
+      } as const
+    )[state],
+  },
+  expiresAt: '2026-11-26T12:00:00.000Z',
+});
+const PENDING = limited('pending');
 
 class MemStorage implements GuardStorage {
   readonly writes: string[] = [];
@@ -198,22 +223,47 @@ describe('EP01 auth flow', () => {
     assert.ok(!l.calls.some((x) => x.startsWith('login:')));
   });
 
-  it('unknown user → access pending with an enrollment reference', async () => {
-    const { c } = controller(
-      fakeLiff().liff,
-      fakeApi({ exchange: { state: 'not-approved', enrollmentRef: 'K7QF-2M9X' } }).api,
-    );
+  it('unknown user → in-app access request screen (EP02: no enrollment reference)', async () => {
+    const n = limited('new');
+    const { c } = controller(fakeLiff().liff, fakeApi({ exchange: n }).api);
     await c.start();
-    assert.deepEqual(c.getView(), { kind: 'not-approved', enrollmentRef: 'K7QF-2M9X' });
+    assert.deepEqual(c.getView(), { kind: 'account', account: 'new', user: n.user });
+    assert.ok(!JSON.stringify(c.getView()).includes('enrollment'));
+  });
+
+  it('EP02 account states map to their own screens (pending, rejected, suspended)', async () => {
+    for (const st of ['pending', 'rejected', 'suspended'] as const) {
+      const { c } = controller(fakeLiff().liff, fakeApi({ session: limited(st) }).api);
+      await c.start();
+      assert.equal(c.getView().kind, 'account', st);
+      assert.equal((c.getView() as { account: string }).account, st);
+    }
   });
 
   it('revoked access → denied (from login or from an existing session)', async () => {
-    const a = controller(fakeLiff().liff, fakeApi({ exchange: { state: 'revoked' } }).api);
+    const a = controller(fakeLiff().liff, fakeApi({ exchange: limited('account-revoked') }).api);
     await a.c.start();
     assert.deepEqual(a.c.getView(), { kind: 'denied', reason: 'revoked' });
-    const b = controller(fakeLiff().liff, fakeApi({ session: { state: 'revoked' } }).api);
+    const b = controller(fakeLiff().liff, fakeApi({ session: limited('account-revoked') }).api);
     await b.c.start();
     assert.deepEqual(b.c.getView(), { kind: 'denied', reason: 'revoked' });
+  });
+
+  it('a session ended by the server (401 revoked) re-checks the account with one LINE exchange', async () => {
+    const a = fakeApi({ session: { state: 'revoked' }, exchange: limited('suspended') });
+    const { c } = controller(fakeLiff().liff, a.api);
+    await c.start();
+    assert.equal(a.calls.filter((x) => x.startsWith('exchange')).length, 1);
+    assert.equal((c.getView() as { account?: string }).account, 'suspended');
+  });
+
+  it('refresh() re-reads the session once (after an access request or invitation)', async () => {
+    const a = fakeApi({ exchange: limited('new') });
+    const { c } = controller(fakeLiff().liff, a.api);
+    await c.start();
+    (a.api as { getSession: AuthApiPort['getSession'] }).getSession = async () => PENDING;
+    await Promise.all([c.refresh(), c.refresh()]);
+    assert.equal((c.getView() as { account?: string }).account, 'pending');
   });
 
   it('expired session in an external browser → session-expired screen, then login', async () => {
@@ -330,6 +380,72 @@ describe('FlowApiClient', () => {
     assert.deepEqual(await client.getSession(), { state: 'expired' });
   });
 
+  it('EP02: a 200 login for a non-active account is a signed-in state, not an error', async () => {
+    const f = fetchStub({
+      'POST /api/auth/line': {
+        status: 200,
+        body: {
+          state: 'revoked',
+          user: { ...SIM_USER, status: 'REVOKED' },
+          session: { expiresAt: APPROVED.expiresAt },
+          csrfToken: 'c',
+        },
+      },
+    });
+    const r = await new FlowApiClient(f.fn).exchange(TOKEN);
+    assert.equal(
+      r.state,
+      'account-revoked',
+      'an account revocation is distinct from a revoked session',
+    );
+  });
+
+  it('EP02 /api/v1 requests: CSRF on mutations, Idempotency-Key when given, typed errors, no raw bodies', async () => {
+    const f = fetchStub({
+      'POST /api/auth/line': {
+        status: 200,
+        body: {
+          state: 'approved',
+          user: SIM_USER,
+          session: { expiresAt: APPROVED.expiresAt },
+          csrfToken: 'csrf-9',
+        },
+      },
+      'GET /api/v1/today': { status: 200, body: { today: [] } },
+      'POST /api/v1/appointments': {
+        status: 409,
+        body: { error: { code: 'VERSION_CONFLICT', message: 'x' } },
+      },
+    });
+    const client = new FlowApiClient(f.fn);
+    await client.exchange(TOKEN);
+    assert.deepEqual(await client.request('/today'), { today: [] });
+    const get = f.calls[1]?.init?.headers as Record<string, string>;
+    assert.equal(get['x-flow-csrf'], undefined, 'no CSRF header on GET');
+    await assert.rejects(
+      client.request('/appointments', { method: 'POST', body: { a: 1 }, idempotencyKey: 'k-1' }),
+      (e: unknown) =>
+        e instanceof ApiRequestError && e.status === 409 && e.code === 'VERSION_CONFLICT',
+    );
+    const post = f.calls[2]?.init?.headers as Record<string, string>;
+    assert.equal(post['x-flow-csrf'], 'csrf-9');
+    assert.equal(post['idempotency-key'], 'k-1');
+  });
+
+  it('EP02: a failed write is never queued or replayed (no offline replay)', async () => {
+    let n = 0;
+    const client = new FlowApiClient(async () => {
+      n += 1;
+      throw new TypeError('Failed to fetch');
+    });
+    await assert.rejects(
+      client.request('/appointments', { method: 'POST', body: {} }),
+      ApiNetworkError,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(n, 1);
+  });
+
   it('turns fetch failures into network errors', async () => {
     const client = new FlowApiClient(async () => {
       throw new TypeError('Failed to fetch');
@@ -395,7 +511,7 @@ describe('EP01 findings F01–F04: rate limiting, single flight, retry disciplin
   });
 
   it('F03: rapid retry taps within the cooldown send one request sequence', async () => {
-    const a = fakeApi({ exchange: { state: 'not-approved', enrollmentRef: 'SIM0-0000' } });
+    const a = fakeApi({ exchange: PENDING });
     const { c, clock } = controller(fakeLiff().liff, a.api);
     await c.start();
     assert.equal(count(a.calls, 'exchange'), 1);
@@ -438,10 +554,10 @@ describe('EP01 findings F01–F04: rate limiting, single flight, retry disciplin
   });
 
   it('recovery after owner approval: pending → (cooldown) → retry → approved, no re-enrollment', async () => {
-    const a = fakeApi({ exchange: { state: 'not-approved', enrollmentRef: 'SIM0-0000' } });
+    const a = fakeApi({ exchange: PENDING });
     const { c, clock } = controller(fakeLiff().liff, a.api);
     await c.start();
-    assert.equal(c.getView().kind, 'not-approved');
+    assert.equal(c.getView().kind, 'account');
     (a.api as { exchange: AuthApiPort['exchange'] }).exchange = async () => APPROVED;
     clock.t += RETRY_COOLDOWN_MS;
     await c.retry();

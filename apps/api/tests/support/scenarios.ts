@@ -49,10 +49,29 @@ async function world(makeStore: StoreFactory, opts: Parameters<typeof createHarn
     assert.equal(r.statusCode, 200);
     return c;
   };
-  return { h, s, owner, famAdmin, famMember, coAdmin, coMember, viewer, loner, pending, revoked, family, company, as };
+  return {
+    h,
+    s,
+    owner,
+    famAdmin,
+    famMember,
+    coAdmin,
+    coMember,
+    viewer,
+    loner,
+    pending,
+    revoked,
+    family,
+    company,
+    as,
+  };
 }
 
-async function create(c: Awaited<ReturnType<Awaited<ReturnType<typeof world>>['as']>>, payload: unknown, headers: Record<string, string> = idem()) {
+async function create(
+  c: Awaited<ReturnType<Awaited<ReturnType<typeof world>>['as']>>,
+  payload: unknown,
+  headers: Record<string, string> = idem(),
+) {
   return c.post('/api/v1/appointments', payload, headers);
 }
 
@@ -71,7 +90,11 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       assert.equal((await newcomer.get('/api/v1/today')).json().error.code, 'ACCOUNT_NEW');
       const req = await newcomer.post('/api/v1/access-requests', { message: 'ขอใช้งานค่ะ' });
       assert.equal(req.statusCode, 201);
-      assert.equal((await newcomer.post('/api/v1/access-requests', {})).statusCode, 409, 'one open request only');
+      assert.equal(
+        (await newcomer.post('/api/v1/access-requests', {})).statusCode,
+        409,
+        'one open request only',
+      );
       assert.equal((await newcomer.get('/api/v1/me')).json().access.requestStatus, 'pending');
 
       const owner = await w.as(w.owner);
@@ -83,12 +106,17 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
         assignments: [{ workspaceId: w.family.id, role: 'MEMBER' }],
       });
       assert.equal(approve.statusCode, 200);
-      assert.equal((await owner.post(`/api/v1/admin/access-requests/${list[0].id}/approve`, {})).statusCode, 409);
+      assert.equal(
+        (await owner.post(`/api/v1/admin/access-requests/${list[0].id}/approve`, {})).statusCode,
+        409,
+      );
 
       // Same session — privileges are re-evaluated per request, no re-login needed.
       const after = (await newcomer.get('/api/v1/me')).json();
       assert.equal(after.user.status, 'ACTIVE');
-      const kinds = after.workspaces.map((x: { kind: string; role: string }) => `${x.kind}:${x.role}`).sort();
+      const kinds = after.workspaces
+        .map((x: { kind: string; role: string }) => `${x.kind}:${x.role}`)
+        .sort();
       assert.deepEqual(kinds, ['FAMILY:MEMBER', 'PERSONAL:ADMIN']);
       assert.equal((await newcomer.get('/api/v1/today')).statusCode, 200);
       await w.h.close();
@@ -98,13 +126,18 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const w = await world(makeStore);
       const pend = await w.as(w.pending);
       assert.equal((await pend.get('/api/v1/workspaces')).statusCode, 403);
-      assert.equal((await pend.post('/api/v1/workspaces', { name: 'ของฉัน', kind: 'CUSTOM' })).statusCode, 403);
+      assert.equal(
+        (await pend.post('/api/v1/workspaces', { name: 'ของฉัน', kind: 'CUSTOM' })).statusCode,
+        403,
+      );
       assert.equal((await pend.get('/api/v1/admin/summary')).statusCode, 403);
       const rev = await w.as(w.revoked);
       assert.equal((await rev.get('/api/v1/me')).json().user.status, 'REVOKED');
       assert.equal((await rev.post('/api/v1/access-requests', {})).statusCode, 403);
       const owner = await w.as(w.owner);
-      const s = await owner.post(`/api/v1/admin/users/${w.coMember.id}/status`, { action: 'suspend' });
+      const s = await owner.post(`/api/v1/admin/users/${w.coMember.id}/status`, {
+        action: 'suspend',
+      });
       assert.equal(s.statusCode, 200);
       await w.h.close();
     });
@@ -112,7 +145,11 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
     it('S2: secure invitation — create, redeem once (owner approves), replay and concurrent redemption fail', async () => {
       const w = await world(makeStore);
       const owner = await w.as(w.owner);
-      const inv = await owner.post('/api/v1/admin/invitations', { workspaceId: w.company.id, role: 'MEMBER', expiresInHours: 24 });
+      const inv = await owner.post('/api/v1/admin/invitations', {
+        workspaceId: w.company.id,
+        role: 'MEMBER',
+        expiresInHours: 24,
+      });
       assert.equal(inv.statusCode, 201);
       const token = (inv.json().link as string).split('/invite/')[1] as string;
       assert.match(token, /^[A-Za-z0-9_-]{43}$/);
@@ -131,13 +168,23 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const codes = [r1.statusCode, r2.statusCode].sort();
       assert.deepEqual(codes, [200, 410], 'exactly one concurrent redemption wins');
       const winner = r1.statusCode === 200 ? a : b;
-      assert.equal((await winner.post('/api/v1/invitations/redeem', { token })).statusCode, 410, 'replay fails');
+      assert.equal(
+        (await winner.post('/api/v1/invitations/inspect', { token })).json().state,
+        'used',
+      );
+      assert.equal(
+        (await winner.post('/api/v1/invitations/redeem', { token })).statusCode,
+        410,
+        'replay fails',
+      );
       // Pending until approved: the invitation alone grants nothing.
       assert.equal((await winner.get('/api/v1/workspaces')).statusCode, 403);
       const req = (await owner.get('/api/v1/admin/access-requests')).json().items[0];
       assert.equal(req.target.role, 'MEMBER');
       await owner.post(`/api/v1/admin/access-requests/${req.id}/approve`, {});
-      const ws = (await winner.get('/api/v1/workspaces')).json().items.map((x: { id: string }) => x.id);
+      const ws = (await winner.get('/api/v1/workspaces'))
+        .json()
+        .items.map((x: { id: string }) => x.id);
       assert.ok(ws.includes(w.company.id));
       await w.h.close();
     });
@@ -146,9 +193,15 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const w = await world(makeStore);
       const owner = await w.as(w.owner);
       const mk = async () =>
-        ((await owner.post('/api/v1/admin/invitations', { workspaceId: w.family.id, role: 'VIEWER', expiresInHours: 1 })).json().link as string).split(
-          '/invite/',
-        )[1] as string;
+        (
+          (
+            await owner.post('/api/v1/admin/invitations', {
+              workspaceId: w.family.id,
+              role: 'VIEWER',
+              expiresInHours: 1,
+            })
+          ).json().link as string
+        ).split('/invite/')[1] as string;
       const t1 = await mk();
       const t2 = await mk();
       const list = (await owner.get('/api/v1/admin/invitations')).json().items;
@@ -160,13 +213,34 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       assert.deepEqual([s1, s2].sort(), ['revoked', 'valid']);
       const live = s1 === 'valid' ? t1 : t2;
       const dead = s1 === 'valid' ? t2 : t1;
-      assert.equal((await c.post('/api/v1/invitations/redeem', { token: dead })).json().error.code, 'INVITATION_REVOKED');
+      assert.equal(
+        (await c.post('/api/v1/invitations/redeem', { token: dead })).json().error.code,
+        'INVITATION_REVOKED',
+      );
       w.h.clock.t += 61 * 60_000; // past the 1 h invitation expiry, within the 2 h session idle limit
-      assert.equal((await c.post('/api/v1/invitations/redeem', { token: live })).statusCode, 410, 'expired');
-      assert.equal((await c.post('/api/v1/invitations/redeem', { token: 'x'.repeat(43) })).statusCode, 404);
+      assert.equal(
+        (await c.post('/api/v1/invitations/redeem', { token: live })).statusCode,
+        410,
+        'expired',
+      );
+      assert.equal(
+        (await c.post('/api/v1/invitations/redeem', { token: 'x'.repeat(43) })).statusCode,
+        404,
+      );
       const member = await w.as(w.famMember);
-      assert.equal((await member.post('/api/v1/admin/invitations', { workspaceId: w.family.id, role: 'ADMIN' })).statusCode, 404);
-      const bad = await owner.post('/api/v1/admin/invitations', { workspaceId: w.family.id, role: 'OWNER' });
+      assert.equal(
+        (
+          await member.post('/api/v1/admin/invitations', {
+            workspaceId: w.family.id,
+            role: 'ADMIN',
+          })
+        ).statusCode,
+        404,
+      );
+      const bad = await owner.post('/api/v1/admin/invitations', {
+        workspaceId: w.family.id,
+        role: 'OWNER',
+      });
       assert.equal(bad.statusCode, 400, 'invitations cannot carry a global role');
       // Suspended users cannot use invitations to bypass suspension.
       await owner.post(`/api/v1/admin/users/${w.coMember.id}/status`, { action: 'suspend' });
@@ -180,8 +254,18 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const w = await world(makeStore);
       const fam = await w.as(w.famMember);
       const co = await w.as(w.coMember);
-      const f = await create(fam, appointmentPayload(w.family.id, { title: 'นัดครอบครัวลับ', visibility: 'WORKSPACE', category: 'family' }));
-      const c = await create(co, appointmentPayload(w.company.id, { title: 'ประชุมบริษัท', visibility: 'WORKSPACE' }));
+      const f = await create(
+        fam,
+        appointmentPayload(w.family.id, {
+          title: 'นัดครอบครัวลับ',
+          visibility: 'WORKSPACE',
+          category: 'family',
+        }),
+      );
+      const c = await create(
+        co,
+        appointmentPayload(w.company.id, { title: 'ประชุมบริษัท', visibility: 'WORKSPACE' }),
+      );
       assert.equal(f.statusCode, 201);
       assert.equal(c.statusCode, 201);
       const fid = f.json().appointment.id;
@@ -191,13 +275,27 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const cal = (await co.get('/api/v1/calendar?from=2026-12-01&to=2026-12-31')).json();
       assert.equal(cal.items.length, 1);
       assert.equal(cal.days['2026-12-10'], 1, 'counts include only authorized appointments');
-      assert.equal((await co.get('/api/v1/appointments?q=' + encodeURIComponent('ครอบครัว'))).json().items.length, 0);
-      assert.equal((await co.get(`/api/v1/appointments?workspaceId=${w.family.id}&from=2026-12-01&to=2026-12-31`)).json().items.length, 0);
+      assert.equal(
+        (await co.get('/api/v1/appointments?q=' + encodeURIComponent('ครอบครัว'))).json().items
+          .length,
+        0,
+      );
+      assert.equal(
+        (
+          await co.get(
+            `/api/v1/appointments?workspaceId=${w.family.id}&from=2026-12-01&to=2026-12-31`,
+          )
+        ).json().items.length,
+        0,
+      );
       // The family viewer sees the workspace appointment but cannot edit it.
       const v = await w.as(w.viewer);
       const vd = (await v.get(`/api/v1/appointments/${fid}`)).json();
       assert.equal(vd.canEdit, false);
-      const put = await v.put(`/api/v1/appointments/${fid}`, { version: 1, appointment: appointmentPayload(w.family.id) });
+      const put = await v.put(`/api/v1/appointments/${fid}`, {
+        version: 1,
+        appointment: appointmentPayload(w.family.id),
+      });
       assert.equal(put.statusCode, 403);
       await w.h.close();
     });
@@ -205,7 +303,10 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
     it('S4: a member’s private appointment is invisible to the global owner and to their own group admin', async () => {
       const w = await world(makeStore);
       const fam = await w.as(w.famMember);
-      const r = await create(fam, appointmentPayload(w.family.id, { title: 'นัดตรวจสุขภาพ (ส่วนตัว)', category: 'health' }));
+      const r = await create(
+        fam,
+        appointmentPayload(w.family.id, { title: 'นัดตรวจสุขภาพ (ส่วนตัว)', category: 'health' }),
+      );
       const id = r.json().appointment.id;
       const owner = await w.as(w.owner);
       assert.equal((await owner.get(`/api/v1/appointments/${id}`)).statusCode, 404);
@@ -213,11 +314,27 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       assert.ok(!audit.includes('สุขภาพ'), 'audit never exposes appointment content');
       const admin = await w.as(w.famAdmin);
       assert.equal((await admin.get(`/api/v1/appointments/${id}`)).statusCode, 404);
-      assert.equal((await admin.get('/api/v1/calendar?from=2026-12-01&to=2026-12-31')).json().items.length, 0);
+      assert.equal(
+        (await admin.get('/api/v1/calendar?from=2026-12-01&to=2026-12-31')).json().items.length,
+        0,
+      );
       // Explicit grant (SELECTED) makes it visible to exactly that member.
-      const sel = await create(fam, appointmentPayload(w.family.id, { visibility: 'SELECTED', sharedWithUserIds: [w.famAdmin.id] }));
-      assert.equal((await admin.get(`/api/v1/appointments/${sel.json().appointment.id}`)).statusCode, 200);
-      assert.equal((await (await w.as(w.viewer)).get(`/api/v1/appointments/${sel.json().appointment.id}`)).statusCode, 404);
+      const sel = await create(
+        fam,
+        appointmentPayload(w.family.id, {
+          visibility: 'SELECTED',
+          sharedWithUserIds: [w.famAdmin.id],
+        }),
+      );
+      assert.equal(
+        (await admin.get(`/api/v1/appointments/${sel.json().appointment.id}`)).statusCode,
+        200,
+      );
+      assert.equal(
+        (await (await w.as(w.viewer)).get(`/api/v1/appointments/${sel.json().appointment.id}`))
+          .statusCode,
+        404,
+      );
       await w.h.close();
     });
 
@@ -236,10 +353,15 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const m = moved.json().appointment;
       assert.deepEqual(scheduled(m), ['2026-12-09T23:00:00.000Z', '2026-12-10T05:00:00.000Z']); // 06:00 & 12:00
       assert.equal(m.version, d.version + 1);
-      const hist = (await me.get(`/api/v1/appointments/${d.id}/history`)).json().items.map((e: { type: string }) => e.type);
+      const hist = (await me.get(`/api/v1/appointments/${d.id}/history`))
+        .json()
+        .items.map((e: { type: string }) => e.type);
       assert.ok(hist.includes('RESCHEDULED') && hist.includes('CREATED'));
       // Stale edit with the old version is refused.
-      const stale = await me.put(`/api/v1/appointments/${d.id}`, { version: d.version, appointment: appointmentPayload(ws) });
+      const stale = await me.put(`/api/v1/appointments/${d.id}`, {
+        version: d.version,
+        appointment: appointmentPayload(ws),
+      });
       assert.equal(stale.statusCode, 409);
       await w.h.close();
     });
@@ -254,7 +376,15 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const after = c.json().appointment;
       assert.equal(after.status, 'CANCELLED');
       assert.ok(after.reminders.every((r: { status: string }) => r.status === 'CANCELLED'));
-      assert.equal((await me.put(`/api/v1/appointments/${d.id}`, { version: after.version, appointment: appointmentPayload(ws) })).statusCode, 409);
+      assert.equal(
+        (
+          await me.put(`/api/v1/appointments/${d.id}`, {
+            version: after.version,
+            appointment: appointmentPayload(ws),
+          })
+        ).statusCode,
+        409,
+      );
       assert.equal((await me.get('/api/v1/history?scope=cancelled')).json().items.length, 1);
       assert.equal((await me.get('/api/v1/today')).json().upcoming.length, 0);
       await w.h.close();
@@ -264,9 +394,14 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const w = await world(makeStore);
       const fam = await w.as(w.famMember);
       const admin = await w.as(w.famAdmin);
-      const shared = (await create(admin, appointmentPayload(w.family.id, { visibility: 'WORKSPACE' }))).json().appointment;
+      const shared = (
+        await create(admin, appointmentPayload(w.family.id, { visibility: 'WORKSPACE' }))
+      ).json().appointment;
       assert.equal((await fam.get(`/api/v1/appointments/${shared.id}`)).statusCode, 200);
-      assert.equal((await admin.del(`/api/v1/workspaces/${w.family.id}/members/${w.famMember.id}`)).statusCode, 200);
+      assert.equal(
+        (await admin.del(`/api/v1/workspaces/${w.family.id}/members/${w.famMember.id}`)).statusCode,
+        200,
+      );
       assert.equal((await fam.get(`/api/v1/appointments/${shared.id}`)).statusCode, 404);
       assert.equal((await fam.get(`/api/v1/workspaces/${w.family.id}`)).statusCode, 404);
       assert.equal((await create(fam, appointmentPayload(w.family.id))).statusCode, 400);
@@ -288,7 +423,11 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       await probe.login('tok:garbage');
       await probe.login('tok:garbage');
       await w.h.restart();
-      assert.equal((await me.get(`/api/v1/appointments/${d.id}`)).statusCode, 200, 'session and data survived');
+      assert.equal(
+        (await me.get(`/api/v1/appointments/${d.id}`)).statusCode,
+        200,
+        'session and data survived',
+      );
       const limited = await probe.login('tok:garbage');
       assert.equal(limited.statusCode, 429, 'rate-limit window survived the restart');
       assert.ok(Number(limited.headers['retry-after']) >= 1);
@@ -301,19 +440,56 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const famGroup = await seedGroup(w.s, 1, w.family.id);
       const coGroup = await seedGroup(w.s, 2, w.company.id);
       assert.equal((await create(fam, appointmentPayload(w.company.id))).statusCode, 400);
-      const forged = await create(fam, appointmentPayload(w.family.id, { destinations: [{ destinationId: coGroup.id, contentPolicy: 'PRIVACY_SAFE' }] }));
+      const forged = await create(
+        fam,
+        appointmentPayload(w.family.id, {
+          destinations: [{ destinationId: coGroup.id, contentPolicy: 'PRIVACY_SAFE' }],
+        }),
+      );
       assert.equal(forged.json().error.code, 'DESTINATION_NOT_PERMITTED');
-      const unknown = await create(fam, appointmentPayload(w.family.id, { destinations: [{ destinationId: '00000000-0000-4000-8000-000000000000', contentPolicy: 'PRIVACY_SAFE' }] }));
+      const unknown = await create(
+        fam,
+        appointmentPayload(w.family.id, {
+          destinations: [
+            {
+              destinationId: '00000000-0000-4000-8000-000000000000',
+              contentPolicy: 'PRIVACY_SAFE',
+            },
+          ],
+        }),
+      );
       assert.equal(unknown.json().error.code, 'DESTINATION_NOT_PERMITTED');
       // A member (not admin, no grant) may not target the family group either.
-      const noGrant = await create(fam, appointmentPayload(w.family.id, { destinations: [{ destinationId: famGroup.id, contentPolicy: 'PRIVACY_SAFE' }] }));
+      const noGrant = await create(
+        fam,
+        appointmentPayload(w.family.id, {
+          destinations: [{ destinationId: famGroup.id, contentPolicy: 'PRIVACY_SAFE' }],
+        }),
+      );
       assert.equal(noGrant.json().error.code, 'DESTINATION_NOT_PERMITTED');
       const admin = await w.as(w.famAdmin);
-      const priv = await create(admin, appointmentPayload(w.family.id, { destinations: [{ destinationId: famGroup.id, contentPolicy: 'FULL' }] }));
+      const priv = await create(
+        admin,
+        appointmentPayload(w.family.id, {
+          destinations: [{ destinationId: famGroup.id, contentPolicy: 'FULL' }],
+        }),
+      );
       assert.equal(priv.json().error.code, 'PRIVATE_CONTENT_TO_GROUP');
-      const sens = await create(admin, appointmentPayload(w.family.id, { visibility: 'WORKSPACE', category: 'health', destinations: [{ destinationId: famGroup.id, contentPolicy: 'FULL' }] }));
+      const sens = await create(
+        admin,
+        appointmentPayload(w.family.id, {
+          visibility: 'WORKSPACE',
+          category: 'health',
+          destinations: [{ destinationId: famGroup.id, contentPolicy: 'FULL' }],
+        }),
+      );
       assert.equal(sens.json().error.code, 'SENSITIVE_CONFIRMATION_REQUIRED');
-      const okSafe = await create(admin, appointmentPayload(w.family.id, { destinations: [{ destinationId: famGroup.id, contentPolicy: 'PRIVACY_SAFE' }] }));
+      const okSafe = await create(
+        admin,
+        appointmentPayload(w.family.id, {
+          destinations: [{ destinationId: famGroup.id, contentPolicy: 'PRIVACY_SAFE' }],
+        }),
+      );
       assert.equal(okSafe.statusCode, 201);
       assert.equal((await fam.get(`/api/v1/appointments/not-a-uuid`)).statusCode, 404);
       await w.h.close();
@@ -334,13 +510,19 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
         return w.h.app.inject({
           method: 'POST',
           url: '/api/line/webhook',
-          headers: { 'content-type': 'application/json', 'x-line-signature': lineSignature(CHANNEL_SECRET, body) },
+          headers: {
+            'content-type': 'application/json',
+            'x-line-signature': lineSignature(CHANNEL_SECRET, body),
+          },
           payload: body,
         });
       };
       const join = ev('join', '01JOINXXXXXXXXXXXXXXXXXXXX');
       assert.deepEqual((await send([join])).json(), { ok: true, received: 1, duplicates: 0 });
-      assert.deepEqual((await send([{ ...join, deliveryContext: { isRedelivery: true } }])).json(), { ok: true, received: 0, duplicates: 1 });
+      assert.deepEqual(
+        (await send([{ ...join, deliveryContext: { isRedelivery: true } }])).json(),
+        { ok: true, received: 0, duplicates: 1 },
+      );
       await w.h.restart();
       assert.equal((await send([join])).json().duplicates, 1, 'dedupe survives restart');
       const groups = await w.s.listDestinations({ kinds: ['GROUP'], limit: 10 });
@@ -348,7 +530,10 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       assert.equal(groups[0]?.status, 'PENDING');
       assert.equal(groups[0]?.workspaceId, null, 'a join grants nothing');
       await send([ev('leave', '01LEAVEXXXXXXXXXXXXXXXXXXX')]);
-      assert.equal((await w.s.listDestinations({ kinds: ['GROUP'], limit: 10 }))[0]?.status, 'REMOVED');
+      assert.equal(
+        (await w.s.listDestinations({ kinds: ['GROUP'], limit: 10 }))[0]?.status,
+        'REMOVED',
+      );
       await w.h.close();
     });
 
@@ -362,12 +547,20 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const me = await w.as(w.loner);
       const ws = (await me.get('/api/v1/me')).json().workspaces[0].id;
       const title = 'ไปหาหมอฟัน 🦷 กับคุณแม่ 👩‍👧 — ห้อง 2 ชั้น 3';
-      const d = (await create(me, appointmentPayload(ws, { title, location: 'โรงพยาบาลจำลอง 🏥', notes: 'นำบัตรนัด 📇' }))).json().appointment;
+      const d = (
+        await create(
+          me,
+          appointmentPayload(ws, { title, location: 'โรงพยาบาลจำลอง 🏥', notes: 'นำบัตรนัด 📇' }),
+        )
+      ).json().appointment;
       const back = (await me.get(`/api/v1/appointments/${d.id}`)).json();
       assert.equal(back.title, title);
       assert.equal(back.location, 'โรงพยาบาลจำลอง 🏥');
       assert.equal(back.notes, 'นำบัตรนัด 📇');
-      assert.equal((await me.get('/api/v1/appointments?q=' + encodeURIComponent('หมอฟัน'))).json().items.length, 1);
+      assert.equal(
+        (await me.get('/api/v1/appointments?q=' + encodeURIComponent('หมอฟัน'))).json().items.length,
+        1,
+      );
       await w.h.close();
     });
 
@@ -376,27 +569,59 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       const me = await w.as(w.loner);
       const ws = (await me.get('/api/v1/me')).json().workspaces[0].id;
       const key = idem();
-      const [a, b] = await Promise.all([create(me, appointmentPayload(ws), key), create(me, appointmentPayload(ws), key)]);
+      const [a, b] = await Promise.all([
+        create(me, appointmentPayload(ws), key),
+        create(me, appointmentPayload(ws), key),
+      ]);
       const ok = [a, b].filter((x) => x.statusCode === 201 || x.statusCode === 200);
       assert.ok(ok.length >= 1);
       const third = await create(me, appointmentPayload(ws), key);
       assert.equal(third.json().replayed, true);
-      assert.equal((await me.get('/api/v1/appointments?from=2026-12-01&to=2026-12-31')).json().items.length, 1);
-      assert.equal((await create(me, appointmentPayload(ws), {})).json().error.code, 'IDEMPOTENCY_KEY_REQUIRED');
+      assert.equal(
+        (await me.get('/api/v1/appointments?from=2026-12-01&to=2026-12-31')).json().items.length,
+        1,
+      );
+      assert.equal(
+        (await create(me, appointmentPayload(ws), {})).json().error.code,
+        'IDEMPOTENCY_KEY_REQUIRED',
+      );
       await w.h.close();
     });
 
     it('owner console guards: last owner protected, admins cannot touch owners or elevate, owners cannot grant OWNER via API', async () => {
       const w = await world(makeStore);
       const owner = await w.as(w.owner);
-      assert.equal((await owner.post(`/api/v1/admin/users/${w.owner.id}/status`, { action: 'suspend' })).statusCode, 403, 'not on yourself');
-      const promote = await owner.post(`/api/v1/admin/users/${w.coAdmin.id}/role`, { globalRole: 'ADMIN' });
+      assert.equal(
+        (await owner.post(`/api/v1/admin/users/${w.owner.id}/status`, { action: 'suspend' }))
+          .statusCode,
+        403,
+        'not on yourself',
+      );
+      const promote = await owner.post(`/api/v1/admin/users/${w.coAdmin.id}/role`, {
+        globalRole: 'ADMIN',
+      });
       assert.equal(promote.statusCode, 200);
-      assert.equal((await owner.post(`/api/v1/admin/users/${w.coAdmin.id}/role`, { globalRole: 'OWNER' })).statusCode, 400);
+      assert.equal(
+        (await owner.post(`/api/v1/admin/users/${w.coAdmin.id}/role`, { globalRole: 'OWNER' }))
+          .statusCode,
+        400,
+      );
       const admin = await w.as(w.coAdmin);
-      assert.equal((await admin.post(`/api/v1/admin/users/${w.owner.id}/status`, { action: 'suspend' })).statusCode, 403);
-      assert.equal((await admin.post(`/api/v1/admin/users/${w.coMember.id}/role`, { globalRole: 'ADMIN' })).statusCode, 403);
-      assert.equal((await admin.post(`/api/v1/admin/users/${w.coMember.id}/status`, { action: 'suspend' })).statusCode, 200);
+      assert.equal(
+        (await admin.post(`/api/v1/admin/users/${w.owner.id}/status`, { action: 'suspend' }))
+          .statusCode,
+        403,
+      );
+      assert.equal(
+        (await admin.post(`/api/v1/admin/users/${w.coMember.id}/role`, { globalRole: 'ADMIN' }))
+          .statusCode,
+        403,
+      );
+      assert.equal(
+        (await admin.post(`/api/v1/admin/users/${w.coMember.id}/status`, { action: 'suspend' }))
+          .statusCode,
+        200,
+      );
       const viewerConsole = await (await w.as(w.viewer)).get('/api/v1/admin/users');
       assert.equal(viewerConsole.statusCode, 404);
       await w.h.close();
@@ -405,19 +630,56 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
     it('workspace management: create, rename with version, members, last-admin protection, leave, archive', async () => {
       const w = await world(makeStore);
       const me = await w.as(w.loner);
-      const ws = (await me.post('/api/v1/workspaces', { name: 'กลุ่มเพื่อน 🎉', kind: 'CUSTOM' })).json();
+      const ws = (
+        await me.post('/api/v1/workspaces', { name: 'กลุ่มเพื่อน 🎉', kind: 'CUSTOM' })
+      ).json();
       assert.equal(ws.role, 'ADMIN');
-      assert.equal((await me.patch(`/api/v1/workspaces/${ws.id}`, { version: 1, name: 'กลุ่มเพื่อนสนิท' })).statusCode, 200);
-      assert.equal((await me.patch(`/api/v1/workspaces/${ws.id}`, { version: 1, name: 'ชนกัน' })).statusCode, 409);
-      assert.equal((await me.post(`/api/v1/workspaces/${ws.id}/members`, { userId: w.coMember.id, role: 'MEMBER' })).statusCode, 201);
-      assert.equal((await me.post(`/api/v1/workspaces/${ws.id}/leave`, {})).statusCode, 409, 'last admin cannot leave');
+      assert.equal(
+        (await me.patch(`/api/v1/workspaces/${ws.id}`, { version: 1, name: 'กลุ่มเพื่อนสนิท' }))
+          .statusCode,
+        200,
+      );
+      assert.equal(
+        (await me.patch(`/api/v1/workspaces/${ws.id}`, { version: 1, name: 'ชนกัน' })).statusCode,
+        409,
+      );
+      assert.equal(
+        (
+          await me.post(`/api/v1/workspaces/${ws.id}/members`, {
+            userId: w.coMember.id,
+            role: 'MEMBER',
+          })
+        ).statusCode,
+        201,
+      );
+      assert.equal(
+        (await me.post(`/api/v1/workspaces/${ws.id}/leave`, {})).statusCode,
+        409,
+        'last admin cannot leave',
+      );
       await me.patch(`/api/v1/workspaces/${ws.id}/members/${w.coMember.id}`, { role: 'ADMIN' });
       assert.equal((await me.post(`/api/v1/workspaces/${ws.id}/leave`, {})).statusCode, 200);
       const other = await w.as(w.coMember);
-      assert.equal((await other.post(`/api/v1/workspaces/${ws.id}/archive`, { version: 2 })).statusCode, 200);
-      assert.ok(!(await other.get('/api/v1/workspaces')).json().items.some((x: { id: string }) => x.id === ws.id));
-      const personal = (await other.get('/api/v1/me')).json().workspaces.find((x: { kind: string }) => x.kind === 'PERSONAL');
-      assert.equal((await other.post(`/api/v1/workspaces/${personal.id}/archive`, { version: personal.version })).statusCode, 404);
+      assert.equal(
+        (await other.post(`/api/v1/workspaces/${ws.id}/archive`, { version: 2 })).statusCode,
+        200,
+      );
+      assert.ok(
+        !(await other.get('/api/v1/workspaces'))
+          .json()
+          .items.some((x: { id: string }) => x.id === ws.id),
+      );
+      const personal = (await other.get('/api/v1/me'))
+        .json()
+        .workspaces.find((x: { kind: string }) => x.kind === 'PERSONAL');
+      assert.equal(
+        (
+          await other.post(`/api/v1/workspaces/${personal.id}/archive`, {
+            version: personal.version,
+          })
+        ).statusCode,
+        404,
+      );
       await w.h.close();
     });
 
@@ -432,19 +694,28 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
       assert.equal((await replay.get('/api/v1/me')).statusCode, 401);
       await c.login(w.famMember.token);
       assert.notEqual(c.cookie, oldCookie);
-      const ws = (await c.get('/api/v1/me')).json().workspaces.map((x: { kind: string }) => x.kind).sort();
+      const ws = (await c.get('/api/v1/me'))
+        .json()
+        .workspaces.map((x: { kind: string }) => x.kind)
+        .sort();
       assert.deepEqual(ws, ['FAMILY', 'PERSONAL']);
       // Mutations without CSRF or from a foreign origin are refused.
       const noCsrf = w.h.client();
       noCsrf.cookie = c.cookie;
-      assert.equal((await noCsrf.post('/api/v1/workspaces', { name: 'x', kind: 'CUSTOM' })).json().error.code, 'CSRF_INVALID');
+      assert.equal(
+        (await noCsrf.post('/api/v1/workspaces', { name: 'x', kind: 'CUSTOM' })).json().error.code,
+        'CSRF_INVALID',
+      );
       noCsrf.origin = 'https://evil.example';
-      assert.equal((await noCsrf.post('/api/v1/workspaces', { name: 'x', kind: 'CUSTOM' })).json().error.code, 'ORIGIN_DENIED');
+      assert.equal(
+        (await noCsrf.post('/api/v1/workspaces', { name: 'x', kind: 'CUSTOM' })).json().error.code,
+        'ORIGIN_DENIED',
+      );
       await w.h.close();
     });
 
     it('preview and estimate are protected, never sent, privacy-safe by default', async () => {
-      const w = await world(makeStore);
+      const w = await world(makeStore, { publicBaseUrl: 'http://127.0.0.1:6767' });
       const admin = await w.as(w.famAdmin);
       const g = await seedGroup(w.s, 5, w.family.id, 'ACTIVE', 6);
       const payload = appointmentPayload(w.family.id, {
@@ -452,18 +723,35 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
         location: 'บ้านคุณยาย',
         destinations: [{ destinationId: g.id, contentPolicy: 'PRIVACY_SAFE' }],
       });
-      const p = await admin.post('/api/v1/preview/reminder', { appointment: payload, ruleIndex: 0, destinationId: g.id });
+      const p = await admin.post('/api/v1/preview/reminder', {
+        appointment: payload,
+        ruleIndex: 0,
+        destinationId: g.id,
+      });
       assert.equal(p.statusCode, 200);
       const body = p.json();
       assert.equal(body.preview, true);
       assert.deepEqual(body.issues, []);
       const json = JSON.stringify(body.message);
-      assert.ok(!json.includes('นัดลับพิเศษ') && !json.includes('บ้านคุณยาย'), 'privacy-safe preview hides title and location');
+      assert.ok(json.includes('https://flow.pdabliss.com/today'));
+      assert.ok(
+        !json.includes('นัดลับพิเศษ') && !json.includes('บ้านคุณยาย'),
+        'privacy-safe preview hides title and location',
+      );
       const est = (await admin.post('/api/v1/preview/estimate', { appointment: payload })).json();
       assert.equal(est.scheduledReminders, 2);
       assert.equal(est.quotaKnown, false);
       const outsider = await w.as(w.coMember);
-      assert.equal((await outsider.post('/api/v1/preview/reminder', { appointment: payload, ruleIndex: 0, destinationId: g.id })).statusCode, 400);
+      assert.equal(
+        (
+          await outsider.post('/api/v1/preview/reminder', {
+            appointment: payload,
+            ruleIndex: 0,
+            destinationId: g.id,
+          })
+        ).statusCode,
+        400,
+      );
       await w.h.close();
     });
   });

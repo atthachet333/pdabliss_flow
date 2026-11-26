@@ -22,8 +22,10 @@ export class ApiError extends Error {
 
 export const notFound = () => new ApiError(404, 'NOT_FOUND', 'Resource not found');
 export const forbidden = (code = 'FORBIDDEN') => new ApiError(403, code, 'Not permitted');
-export const conflictError = (code = 'CONFLICT', message = 'The resource changed; reload and try again') =>
-  new ApiError(409, code, message);
+export const conflictError = (
+  code = 'CONFLICT',
+  message = 'The resource changed; reload and try again',
+) => new ApiError(409, code, message);
 export const badRequest = (code = 'VALIDATION_ERROR', details?: Record<string, unknown>) =>
   new ApiError(400, code, 'Request validation failed', details);
 

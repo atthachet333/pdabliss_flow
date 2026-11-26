@@ -17,7 +17,14 @@ import { FileAccessStore } from '../src/auth/access.js';
 import { importOwner, IdentityService } from '../src/domain/identity.js';
 import { MemoryStore } from '../src/store/memory.js';
 import { integration, ORIGIN, OWNER_ID, tempDir, testEnv } from './helpers.js';
-import { createHarness, fakeVerifier, lineId, seedUser, tokenFor, type Harness } from './support/harness.js';
+import {
+  createHarness,
+  fakeVerifier,
+  lineId,
+  seedUser,
+  tokenFor,
+  type Harness,
+} from './support/harness.js';
 
 const FORM = 'application/x-www-form-urlencoded';
 const EVIL = 'https://evil.example';
@@ -43,22 +50,46 @@ describe('auth: configuration', () => {
       store: new MemoryStore(),
     });
     await app.ready();
-    assert.equal((await app.inject({ method: 'GET', url: '/api/auth/config' })).json().authConfigured, false);
-    const r = await app.inject({ method: 'POST', url: '/api/auth/line', headers: JSON_CT, payload: { idToken: 'a.b.c' } });
+    assert.equal(
+      (await app.inject({ method: 'GET', url: '/api/auth/config' })).json().authConfigured,
+      false,
+    );
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/auth/line',
+      headers: JSON_CT,
+      payload: { idToken: 'a.b.c' },
+    });
     assert.equal(r.statusCode, 503);
     assert.equal((await app.inject({ method: 'GET', url: '/api/auth/session' })).statusCode, 503);
     await app.close();
     // EP02: without a database the application API fails closed too.
     const noStore = buildApp({ env: testEnv(integration()), store: null });
     await noStore.ready();
-    assert.equal((await noStore.inject({ method: 'GET', url: '/api/v1/today' })).json().error.code, 'SERVICE_NOT_CONFIGURED');
-    assert.equal((await noStore.inject({ method: 'POST', url: '/api/auth/line', headers: JSON_CT, payload: { idToken: 'a.b.c' } })).statusCode, 503);
+    assert.equal(
+      (await noStore.inject({ method: 'GET', url: '/api/v1/today' })).json().error.code,
+      'SERVICE_NOT_CONFIGURED',
+    );
+    assert.equal(
+      (
+        await noStore.inject({
+          method: 'POST',
+          url: '/api/auth/line',
+          headers: JSON_CT,
+          payload: { idToken: 'a.b.c' },
+        })
+      ).statusCode,
+      503,
+    );
     await noStore.close();
   });
 
   it('exposes only non-secret config (LIFF ID) when configured', async () => {
     const h = await createHarness();
-    assert.deepEqual((await h.client().get('/api/auth/config')).json(), { authConfigured: true, liffId: `${CHANNEL}-AbCdEfGh` });
+    assert.deepEqual((await h.client().get('/api/auth/config')).json(), {
+      authConfigured: true,
+      liffId: `${CHANNEL}-AbCdEfGh`,
+    });
     await h.close();
   });
 });
@@ -71,7 +102,8 @@ describe('auth: login outcomes', () => {
     assert.equal(res.statusCode, 200);
     const cookie = String(res.headers['set-cookie']);
     assert.match(cookie, /^__Host-flow_session=[A-Za-z0-9_-]{43};/);
-    for (const attr of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/']) assert.ok(cookie.includes(attr), attr);
+    for (const attr of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/'])
+      assert.ok(cookie.includes(attr), attr);
     assert.ok(!/Domain=/i.test(cookie));
     assert.match(cookie, /Max-Age=7200/, 'cookie lifetime follows the idle limit (test clock)');
     assert.equal(res.json().state, 'approved');
@@ -92,7 +124,12 @@ describe('auth: login outcomes', () => {
       deps: { verifier: fakeVerifier, messaging: null },
     });
     await app.ready();
-    const r = await app.inject({ method: 'POST', url: '/api/auth/line', headers: JSON_CT, payload: { idToken: tokenFor(lineId(3)) } });
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/auth/line',
+      headers: JSON_CT,
+      payload: { idToken: tokenFor(lineId(3)) },
+    });
     assert.equal(r.json().state, 'new');
     await app.close();
   });
@@ -104,7 +141,12 @@ describe('auth: login outcomes', () => {
     assert.equal(r.statusCode, 200);
     assert.equal(r.json().state, 'new');
     assert.ok(!/reference/i.test(r.body), 'no enrollment reference is issued in EP02');
-    for (const url of ['/api/v1/today', '/api/v1/workspaces', '/api/v1/appointments', '/api/v1/admin/summary'])
+    for (const url of [
+      '/api/v1/today',
+      '/api/v1/workspaces',
+      '/api/v1/appointments',
+      '/api/v1/admin/summary',
+    ])
       assert.equal((await c.get(url)).statusCode, 403, url);
     await h.close();
   });
@@ -133,8 +175,18 @@ describe('auth: login outcomes', () => {
 
   it('rejects client-supplied identity or role fields (no escalation)', async () => {
     const h = await createHarness();
-    for (const extra of [{ lineUserId: lineId(2) }, { role: 'OWNER' }, { globalRole: 'OWNER' }, { status: 'ACTIVE' }]) {
-      const r = await raw(h, '/api/auth/line', JSON_CT, JSON.stringify({ idToken: tokenFor(lineId(1)), ...extra }));
+    for (const extra of [
+      { lineUserId: lineId(2) },
+      { role: 'OWNER' },
+      { globalRole: 'OWNER' },
+      { status: 'ACTIVE' },
+    ]) {
+      const r = await raw(
+        h,
+        '/api/auth/line',
+        JSON_CT,
+        JSON.stringify({ idToken: tokenFor(lineId(1)), ...extra }),
+      );
       assert.equal(r.statusCode, 400, JSON.stringify(extra));
     }
     assert.equal(await h.store.countUsers({}), 0);
@@ -144,8 +196,15 @@ describe('auth: login outcomes', () => {
   it('rejects missing or foreign Origin (CSRF on login)', async () => {
     const h = await createHarness();
     const body = JSON.stringify({ idToken: tokenFor(lineId(1)) });
-    assert.equal((await raw(h, '/api/auth/line', { 'content-type': 'application/json' }, body)).statusCode, 403);
-    assert.equal((await raw(h, '/api/auth/line', { origin: EVIL, 'content-type': 'application/json' }, body)).statusCode, 403);
+    assert.equal(
+      (await raw(h, '/api/auth/line', { 'content-type': 'application/json' }, body)).statusCode,
+      403,
+    );
+    assert.equal(
+      (await raw(h, '/api/auth/line', { origin: EVIL, 'content-type': 'application/json' }, body))
+        .statusCode,
+      403,
+    );
     assert.equal(await h.store.countUsers({}), 0);
     await h.close();
   });
@@ -225,7 +284,10 @@ describe('auth: session lifecycle (persistent)', () => {
     await oc.login(owner.token);
     const uc = h.client();
     await uc.login(u.token);
-    assert.equal((await oc.post(`/api/v1/admin/users/${u.id}/status`, { action: 'revoke' })).statusCode, 200);
+    assert.equal(
+      (await oc.post(`/api/v1/admin/users/${u.id}/status`, { action: 'revoke' })).statusCode,
+      200,
+    );
     assert.equal((await uc.get('/api/auth/session')).json().state, 'revoked');
     assert.equal((await uc.get('/api/v1/today')).statusCode, 401);
     await h.close();
@@ -268,23 +330,66 @@ describe('auth: approvals and owner import (replaces the EP01 access file)', () 
     const s = new MemoryStore();
     const now = new Date(Date.UTC(2026, 10, 26));
     const u = await seedUser(s, 5, { status: 'NEW' });
-    const first = await importOwner(s, { lineUserId: OWNER_ID, displayName: 'เจ้าของ', loginChannelId: CHANNEL, allowAdditionalOwner: false }, now);
+    const first = await importOwner(
+      s,
+      {
+        lineUserId: OWNER_ID,
+        displayName: 'เจ้าของ',
+        loginChannelId: CHANNEL,
+        allowAdditionalOwner: false,
+      },
+      now,
+    );
     assert.equal(first.outcome, 'created');
     const owner = (await s.getUser(first.userId))!;
     const ids = new IdentityService(s, () => now, null);
     const actor = { user: owner, memberships: [] } as never;
-    await assert.rejects(ids.approveRequest(actor, '00000000-0000-4000-8000-000000000000', []), (e: { status?: number }) => e.status === 404);
+    await assert.rejects(
+      ids.approveRequest(actor, '00000000-0000-4000-8000-000000000000', []),
+      (e: { status?: number }) => e.status === 404,
+    );
     assert.equal(
-      (await importOwner(s, { lineUserId: OWNER_ID, displayName: null, loginChannelId: CHANNEL, allowAdditionalOwner: false }, now)).outcome,
+      (
+        await importOwner(
+          s,
+          {
+            lineUserId: OWNER_ID,
+            displayName: null,
+            loginChannelId: CHANNEL,
+            allowAdditionalOwner: false,
+          },
+          now,
+        )
+      ).outcome,
       'unchanged',
       'idempotent',
     );
     await assert.rejects(
-      importOwner(s, { lineUserId: u.line, displayName: null, loginChannelId: CHANNEL, allowAdditionalOwner: false }, now),
+      importOwner(
+        s,
+        {
+          lineUserId: u.line,
+          displayName: null,
+          loginChannelId: CHANNEL,
+          allowAdditionalOwner: false,
+        },
+        now,
+      ),
       (e: { code?: string }) => e.code === 'OWNER_EXISTS',
     );
     assert.equal(
-      (await importOwner(s, { lineUserId: u.line, displayName: null, loginChannelId: CHANNEL, allowAdditionalOwner: true }, now)).outcome,
+      (
+        await importOwner(
+          s,
+          {
+            lineUserId: u.line,
+            displayName: null,
+            loginChannelId: CHANNEL,
+            allowAdditionalOwner: true,
+          },
+          now,
+        )
+      ).outcome,
       'promoted',
     );
   });
@@ -307,9 +412,13 @@ describe('auth: approvals and owner import (replaces the EP01 access file)', () 
     const dir = tempDir();
     writeFileSync(
       join(dir, 'access.json'),
-      '{"version":1,"users":[{"lineUserId":"' + OWNER_ID + '","role":"superuser","status":"active","addedAt":"x"}]}',
+      '{"version":1,"users":[{"lineUserId":"' +
+        OWNER_ID +
+        '","role":"superuser","status":"active","addedAt":"x"}]}',
     );
-    const owners = new FileAccessStore({ dir }).listUsers().filter((u) => u.role === 'owner' && u.status === 'active');
+    const owners = new FileAccessStore({ dir })
+      .listUsers()
+      .filter((u) => u.role === 'owner' && u.status === 'active');
     assert.equal(owners.length, 0);
   });
 });
@@ -318,7 +427,12 @@ describe('auth: Origin before parsing (EP01 G09)', () => {
   it('foreign-origin POSTs are 403 ORIGIN_DENIED whatever the Content-Type (configured)', async () => {
     const h = await createHarness();
     for (const url of ['/api/auth/logout', '/api/auth/line', '/api/v1/workspaces'])
-      for (const ct of [FORM, 'application/json', 'text/plain', 'multipart/form-data; boundary=x']) {
+      for (const ct of [
+        FORM,
+        'application/json',
+        'text/plain',
+        'multipart/form-data; boundary=x',
+      ]) {
         const r = await raw(h, url, { origin: EVIL, 'content-type': ct }, '');
         assert.equal(r.statusCode, 403, `${url} ${ct}`);
         assert.equal(r.json().error.code, 'ORIGIN_DENIED');
@@ -327,11 +441,24 @@ describe('auth: Origin before parsing (EP01 G09)', () => {
   });
 
   it('foreign-origin POSTs are 403 even when auth is not configured; allowed origin gets 503', async () => {
-    const app = buildApp({ env: testEnv(integration({ line: { ...integration().line, loginChannelId: null } })), store: new MemoryStore() });
+    const app = buildApp({
+      env: testEnv(integration({ line: { ...integration().line, loginChannelId: null } })),
+      store: new MemoryStore(),
+    });
     await app.ready();
-    const evil = await app.inject({ method: 'POST', url: '/api/auth/line', headers: { origin: EVIL, 'content-type': FORM }, payload: '' });
+    const evil = await app.inject({
+      method: 'POST',
+      url: '/api/auth/line',
+      headers: { origin: EVIL, 'content-type': FORM },
+      payload: '',
+    });
     assert.equal(evil.statusCode, 403);
-    const good = await app.inject({ method: 'POST', url: '/api/auth/line', headers: JSON_CT, payload: '{"idToken":"a.b.c"}' });
+    const good = await app.inject({
+      method: 'POST',
+      url: '/api/auth/line',
+      headers: JSON_CT,
+      payload: '{"idToken":"a.b.c"}',
+    });
     assert.equal(good.statusCode, 503);
     await app.close();
   });
@@ -341,7 +468,17 @@ describe('auth: Origin before parsing (EP01 G09)', () => {
     const u = await seedUser(h.store, 1);
     const c = h.client();
     await c.login(u.token);
-    const r = await raw(h, '/api/auth/logout', { origin: ORIGIN, 'content-type': FORM, cookie: c.cookie as string, 'x-flow-csrf': c.csrf as string }, '');
+    const r = await raw(
+      h,
+      '/api/auth/logout',
+      {
+        origin: ORIGIN,
+        'content-type': FORM,
+        cookie: c.cookie as string,
+        'x-flow-csrf': c.csrf as string,
+      },
+      '',
+    );
     assert.equal(r.statusCode, 415);
     assert.equal((await c.get('/api/auth/session')).statusCode, 200, 'session untouched');
     await h.close();
@@ -362,18 +499,35 @@ describe('auth: Origin before parsing (EP01 G09)', () => {
       { origin: ORIGIN, 'x-flow-csrf': 'short' },
     ];
     for (const extra of cases) {
-      const r = await raw(h, '/api/auth/logout', { 'content-type': 'application/json', cookie, ...extra });
+      const r = await raw(h, '/api/auth/logout', {
+        'content-type': 'application/json',
+        cookie,
+        ...extra,
+      });
       assert.equal(r.statusCode, 403, JSON.stringify(Object.keys(extra)));
     }
-    const body = await raw(h, '/api/auth/logout', { ...JSON_CT, cookie, 'x-flow-csrf': csrf }, '{"all":true}');
+    const body = await raw(
+      h,
+      '/api/auth/logout',
+      { ...JSON_CT, cookie, 'x-flow-csrf': csrf },
+      '{"all":true}',
+    );
     assert.equal(body.statusCode, 400);
-    assert.equal((await c.get('/api/auth/session')).statusCode, 200, 'still active after every refused logout');
+    assert.equal(
+      (await c.get('/api/auth/session')).statusCode,
+      200,
+      'still active after every refused logout',
+    );
     await h.close();
   });
 
   it('logout without a session (allowed origin, no body) is idempotent: 200 and cookie cleared', async () => {
     const h = await createHarness();
-    const r = await h.app.inject({ method: 'POST', url: '/api/auth/logout', headers: { origin: ORIGIN } });
+    const r = await h.app.inject({
+      method: 'POST',
+      url: '/api/auth/logout',
+      headers: { origin: ORIGIN },
+    });
     assert.equal(r.statusCode, 200);
     assert.equal(r.json().state, 'logged-out');
     assert.match(String(r.headers['set-cookie']), /Max-Age=0/);
@@ -387,7 +541,10 @@ describe('auth: rate limiting per trusted client identity (EP01 F05, persisted)'
     const a = { 'x-flow-client-ip': '198.51.100.1' };
     for (let i = 0; i < 2; i += 1) await attempt(h, '127.0.0.1', a);
     assert.equal((await attempt(h, '127.0.0.1', a)).statusCode, 429);
-    assert.equal((await attempt(h, '127.0.0.1', { 'x-flow-client-ip': '2001:db8::2' })).statusCode, 401);
+    assert.equal(
+      (await attempt(h, '127.0.0.1', { 'x-flow-client-ip': '2001:db8::2' })).statusCode,
+      401,
+    );
     await h.close();
   });
 
@@ -419,7 +576,10 @@ describe('auth: rate limiting per trusted client identity (EP01 F05, persisted)'
   it('x-flow-client-ip from a non-loopback peer is ignored (cannot be spoofed remotely)', async () => {
     const h = await createHarness({ loginLimit: 2 });
     const codes: number[] = [];
-    for (let i = 1; i <= 3; i += 1) codes.push((await attempt(h, '203.0.113.50', { 'x-flow-client-ip': `198.51.100.${i}` })).statusCode);
+    for (let i = 1; i <= 3; i += 1)
+      codes.push(
+        (await attempt(h, '203.0.113.50', { 'x-flow-client-ip': `198.51.100.${i}` })).statusCode,
+      );
     assert.deepEqual(codes, [401, 401, 429]);
     await h.close();
   });
@@ -436,10 +596,18 @@ describe('auth: logout, re-login and restoration', () => {
     const replay = h.client();
     replay.cookie = old.cookie;
     replay.csrf = old.csrf;
-    for (const url of ['/api/auth/session', '/api/v1/me', '/api/v1/today']) assert.equal((await replay.get(url)).statusCode, 401, url);
-    assert.equal((await replay.post('/api/v1/workspaces', { name: 'x', kind: 'CUSTOM' })).statusCode, 401);
+    for (const url of ['/api/auth/session', '/api/v1/me', '/api/v1/today'])
+      assert.equal((await replay.get(url)).statusCode, 401, url);
+    assert.equal(
+      (await replay.post('/api/v1/workspaces', { name: 'x', kind: 'CUSTOM' })).statusCode,
+      401,
+    );
     await h.restart();
-    assert.equal((await replay.get('/api/auth/session')).statusCode, 401, 'still dead after a restart');
+    assert.equal(
+      (await replay.get('/api/auth/session')).statusCode,
+      401,
+      'still dead after a restart',
+    );
     await h.close();
   });
 
@@ -467,7 +635,11 @@ describe('auth: logout, re-login and restoration', () => {
     assert.equal(again.json().csrfToken, csrf);
     assert.equal(again.headers['set-cookie'], undefined, 'no new cookie');
     await h.restart();
-    assert.equal((await c.get('/api/auth/session')).json().csrfToken, csrf, 'persisted across restart');
+    assert.equal(
+      (await c.get('/api/auth/session')).json().csrfToken,
+      csrf,
+      'persisted across restart',
+    );
     await h.close();
   });
 
@@ -477,7 +649,12 @@ describe('auth: logout, re-login and restoration', () => {
     const p = await seedUser(h.store, 2, { status: 'PENDING' });
     const c = h.client();
     assert.equal((await c.login(p.token)).json().state, 'pending');
-    for (const url of ['/api/v1/today', '/api/v1/calendar?from=2026-12-01&to=2026-12-31', '/api/v1/admin/users', '/api/line/status'])
+    for (const url of [
+      '/api/v1/today',
+      '/api/v1/calendar?from=2026-12-01&to=2026-12-31',
+      '/api/v1/admin/users',
+      '/api/line/status',
+    ])
       assert.equal((await c.get(url)).statusCode, 403, url);
     const me = (await c.get('/api/v1/me')).json();
     assert.deepEqual(me.workspaces, []);
@@ -491,7 +668,10 @@ describe('auth: logout, re-login and restoration', () => {
     const c = h.client();
     await c.login(tokenFor(lineId(70)));
     assert.equal((await c.post('/api/v1/access-requests', {})).statusCode, 201);
-    const [a, b] = await Promise.all([c.post('/api/v1/access-requests', {}), c.post('/api/v1/access-requests', {})]);
+    const [a, b] = await Promise.all([
+      c.post('/api/v1/access-requests', {}),
+      c.post('/api/v1/access-requests', {}),
+    ]);
     assert.deepEqual([a.statusCode, b.statusCode], [409, 409]);
     const oc = h.client();
     await oc.login(owner.token);
