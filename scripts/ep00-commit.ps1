@@ -71,6 +71,8 @@ $text = [System.IO.File]::ReadAllText($report, [System.Text.Encoding]::UTF8)
 if ($text.Contains('PENDING_EP00_COMMIT')) {
   $text = $text.Replace('PENDING_EP00_COMMIT', $hash1)
   [System.IO.File]::WriteAllText($report, $text, (New-Object System.Text.UTF8Encoding($false)))
+  # Keep the report Prettier-clean (the hash changes table column widths).
+  cmd.exe /d /c "node node_modules/prettier/bin/prettier.cjs --write docs/EP00-REPORT.md --log-level warn"
   git add -- docs/EP00-REPORT.md
   $msg2 = @"
 docs(EP00): record foundation commit hash in EP00 report
