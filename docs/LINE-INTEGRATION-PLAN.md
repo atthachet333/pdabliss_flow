@@ -91,6 +91,9 @@ Consequences for EP01:
 
 ## 5. EP01 setup checklist (★ = owner action)
 
+> **Superseded by EP01.** The implementation is described in [EP01-ARCHITECTURE.md](EP01-ARCHITECTURE.md),
+> and the owner steps are in [EP01-OWNER-CHECKLIST.md](EP01-OWNER-CHECKLIST.md). The list below is kept for history.
+
 1. ~~Provider, Messaging API channel, LINE Login channel, LIFF app, group join setting~~
    **Done by the owner** (§4).
 2. ★ Approve how EP01 exposes HTTPS for the webhook and LIFF endpoint (temporary tunnel vs.
@@ -104,3 +107,28 @@ Consequences for EP01:
    **test group without the HR bot**.
 7. ★ Check the real monthly quota in OA Manager.
 8. Rich menu upload is EP05, after the final art is approved.
+
+## 6. EP01 decisions (2026-11-26)
+
+| Topic             | Decision                                                                                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LIFF SDK          | npm `@line/liff` `^2.32.0` (current at implementation time; the exact installed version is logged by `ep01-verify.ps1`, G02). It is loaded lazily, and `liff.init` runs before any routing change |
+| ID token          | Verified only server-side via `POST /oauth2/v2.1/verify` with `client_id` = 2012804685. No Login channel secret is needed                                                                         |
+| HTTPS for testing | Temporary Cloudflare **Quick Tunnel** to the dev gateway, started only with `-IApprovePublicExposure`. The production tunnel, DNS, PM2 and firewall are untouched                                 |
+| LIFF endpoint     | During a test session it is set temporarily to the tunnel URL by the owner. `https://flow.pdabliss.com/` stays the planned production endpoint (EP07)                                             |
+| Webhook           | Signed, destination-checked, deduplicated, metadata only. "Use webhook" is enabled only during owner tests                                                                                        |
+| Outbound messages | None. The Messaging adapter is read-only (bot info, quota, consumption)                                                                                                                           |
+| HR bot groups     | One LINE OA per group (verified). Sally never joins HR groups, and she uses separate scheduling groups (EP01-ARCHITECTURE §7)                                                                     |
+| Quota             | **Verified 2026-11-26** from the Messaging API (owner status panel): limited, 300 messages per month, 0 consumed. Re-read before planning sends. Never hard-code                                  |
+| Login channel     | Stays **Developing**. Testers are added as channel testers by the owner                                                                                                                           |
+
+## 7. Rich menu: owner decision (recorded, not installed)
+
+- Direction: **"Luxury Tech × Cute Sally"**. Thai tagline: **จัดการทุกนัดหมายอย่างมีระดับ**.
+- Order (custom touch areas via the Messaging API, image 2500×1686): วันนี้ / **เพิ่มนัดหมาย**
+  (top centre, primary) / ปฏิทิน / กลุ่มของฉัน / ประวัติ / ตั้งค่า.
+- The owner-approved artwork has **not** been supplied to the project. No replacement is
+  invented, and nothing is uploaded or installed in EP01. Installation is EP05, with the
+  supplied image.
+- Known EP02 cosmetic backlog item: on narrow screens the rich-menu docs table breaks
+  "พื้นที่" mid-word.

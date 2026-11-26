@@ -22,6 +22,7 @@ export {
   LayoutGrid,
   ListChecks,
   LoaderCircle,
+  LogOut,
   Lock,
   MapPin,
   MessageCircle,

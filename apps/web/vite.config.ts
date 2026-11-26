@@ -20,10 +20,8 @@ export default defineConfig(({ mode }) => ({
     port: WEB_PORT,
     strictPort: true,
     proxy: {
-      '/api': {
-        target: `http://127.0.0.1:${API_PORT}`,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
+      // EP01: the API serves its routes under /api (same paths as the dev gateway).
+      '/api': { target: `http://127.0.0.1:${API_PORT}` },
     },
   },
   preview: { host: '127.0.0.1', port: WEB_PORT, strictPort: true },

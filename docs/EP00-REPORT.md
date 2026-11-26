@@ -245,14 +245,14 @@ and backups (SECURITY-AND-PRIVACY.md).
 
 ## K. Git information
 
-| Item                      | Value                                                                       |
-| ------------------------- | --------------------------------------------------------------------------- |
-| Branch                    | `main` (created by `scripts\ep00-commit.ps1` if no repository exists)       |
-| EP00 foundation commit    | `d6776f60c9bb5e95bf36e3b6f95c00743902b0b2`                                  |
-| Follow-up commit          | Writes this hash into the report (made automatically by the same script)    |
-| Author                    | The owner's configured Git identity (`git config user.name` / `user.email`) |
-| Remote / push             | **None.** No remote is configured and nothing is pushed                     |
-| Working tree after commit | Expected clean. The script records `git status` in `.qa\git.log`            |
+| Item                      | Value                                                                                                                                                            |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch                    | `main` (created by `scripts\ep00-commit.ps1` if no repository exists)                                                                                            |
+| EP00 foundation commit    | `d6776f60c9bb5e95bf36e3b6f95c00743902b0b2`                                                                                                                       |
+| Follow-up commit          | Writes this hash into the report (made automatically by the same script)                                                                                         |
+| Author                    | The owner's configured Git identity (`git config user.name` / `user.email`)                                                                                      |
+| Remote / push             | None from the EP00 scripts. **Correction (EP01):** afterwards the owner added `origin` (github.com/atthachet333/pdabliss_flow, public) and pushed `main` himself |
+| Working tree after commit | Expected clean. The script records `git status` in `.qa\git.log`                                                                                                 |
 
 **G09 repository review (before the commit):**
 

@@ -5,9 +5,9 @@
 Shared Calendar & LINE Personal Assistant, with **Sally (น้องแซลลี่)** as the mascot.
 Designed & Engineered by PDA BLISS.
 
-> **Status: EP00, the foundation only.** It has no LINE integration, no database, no
-> authentication and sends no notifications. Everything interactive runs on simulated data and is
-> labelled that way. The roadmap is in [docs/PRODUCT-ROADMAP.md](docs/PRODUCT-ROADMAP.md).
+> **Status: EP01, LINE integration & authentication foundation.** LIFF login with server-side
+> token verification, private access list, secure sessions and a signed (receive-only) LINE webhook.
+> It still has no database, no appointment features and sends **no** LINE messages. The roadmap is in [docs/PRODUCT-ROADMAP.md](docs/PRODUCT-ROADMAP.md).
 
 ## Local development (Windows)
 
@@ -26,6 +26,7 @@ npm run dev
 | -------------------------- | ------------------------------------------------------------------------ |
 | Web app                    | <http://127.0.0.1:6767/>                                                 |
 | Design showcase (dev only) | <http://127.0.0.1:6767/dev/design-showcase>                              |
+| Auth states (dev only)     | <http://127.0.0.1:6767/dev/auth-states> (simulated identities)           |
 | API health                 | <http://127.0.0.1:6768/health> (also via the web proxy at `/api/health`) |
 
 Both servers bind to loopback only. If a port is already in use, the server **fails loudly**
@@ -46,6 +47,12 @@ and does not stop the other process. To pick another port, set `WEB_PORT` or `AP
 | `npm run brand:generate`          | Regenerates the SVG brand assets from `scripts/generate-brand-assets.mjs`                       |
 | `scripts\ep00-verify.ps1`         | Runs every EP00 quality gate and writes logs to `.qa\`                                          |
 | `scripts\ep00-commit.ps1`         | Makes a local commit after review (never pushes)                                                |
+| `scripts\ep01-setup-secrets.ps1`  | Creates the external secret file (outside OneDrive, hidden input, user-only ACL)                |
+| `scripts\ep01-verify.ps1`         | Runs the EP01 gates (install, typecheck, lint, tests, builds, secret scans, local smoke)        |
+| `node scripts/ep01-smoke.mjs`     | G09 HTTP smoke harness (`--self-test`, `--phase A\|B`; loopback only, synthetic config)         |
+| `scripts\ep01-integration.ps1`    | Owner-approved temporary Quick Tunnel test session (`-Start -IApprovePublicExposure` / `-Stop`) |
+| `npm run access -- <cmd>`         | Local access list: `pending`, `list`, `approve <REF> --role owner\|tester`, `revoke`            |
+| `npm run gateway`                 | Dev gateway on 127.0.0.1:6769 serving the built app + allow-listed API routes                   |
 
 ## Structure
 
@@ -70,6 +77,7 @@ scripts/      Dev runner, asset generator, verification and safety scripts
 - [System architecture](docs/SYSTEM-ARCHITECTURE.md) · [Security & privacy](docs/SECURITY-AND-PRIVACY.md)
 - [LINE integration plan](docs/LINE-INTEGRATION-PLAN.md) · [Notification engine plan](docs/NOTIFICATION-ENGINE-PLAN.md)
 - [Deployment plan](docs/DEPLOYMENT-PLAN.md)
+- [EP01 architecture & contracts](docs/EP01-ARCHITECTURE.md) · [EP01 owner checklist](docs/EP01-OWNER-CHECKLIST.md) · [EP01 report](docs/EP01-REPORT.md)
 
 ## OneDrive note
 

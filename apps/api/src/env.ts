@@ -14,7 +14,59 @@ const envSchema = z.object({
   CORS_ORIGINS: z.string().default('http://localhost:6767,http://127.0.0.1:6767'),
   /** Must be "true" to bind a non-loopback address outside production. */
   ALLOW_NON_LOOPBACK: z.enum(['true', 'false']).default('false'),
+
+  // ---- EP01 integration (all optional; features fail closed when absent) ----
+  PUBLIC_BASE_URL: z.string().optional(),
+  LINE_LOGIN_CHANNEL_ID: z
+    .string()
+    .regex(/^\d{10}$/, 'must be a 10-digit channel ID')
+    .optional(),
+  LINE_MESSAGING_CHANNEL_ID: z
+    .string()
+    .regex(/^\d{10}$/, 'must be a 10-digit channel ID')
+    .optional(),
+  LINE_LIFF_ID: z
+    .string()
+    .regex(/^\d{10}-[A-Za-z0-9]{8}$/, 'must look like 1234567890-AbCdEfGh')
+    .optional(),
+  LINE_MESSAGING_CHANNEL_SECRET: z
+    .string()
+    .regex(/^[0-9a-f]{32}$/, 'must be 32 hex characters')
+    .optional(),
+  LINE_CHANNEL_ACCESS_TOKEN: z
+    .string()
+    .regex(/^[A-Za-z0-9+/=._-]{40,}$/, 'has an unexpected format')
+    .optional(),
+  LINE_BOT_USER_ID: z
+    .string()
+    .regex(/^U[0-9a-f]{32}$/, 'must be a LINE user ID')
+    .optional(),
+  SESSION_SECRET: z.string().min(32, 'must be at least 32 characters').optional(),
+  FLOW_ALLOWED_LINE_USER_IDS: z.string().optional(),
+  FLOW_SECRET_DIR: z.string().optional(),
+  SESSION_ABSOLUTE_MINUTES: z.coerce.number().int().min(5).max(1440).default(480),
+  SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(1440).default(120),
 });
+
+export interface LineConfig {
+  loginChannelId: string | null;
+  messagingChannelId: string | null;
+  liffId: string | null;
+  messagingChannelSecret: string | null;
+  channelAccessToken: string | null;
+  botUserId: string | null;
+}
+
+/** EP01 integration settings. Values are secrets or near-secrets: never log this object. */
+export interface IntegrationConfig {
+  publicBaseUrl: string | null;
+  line: LineConfig;
+  sessionSecret: string | null;
+  allowedLineUserIds: string[];
+  secretDir: string | null;
+  sessionAbsoluteMinutes: number;
+  sessionIdleMinutes: number;
+}
 
 export interface AppEnv {
   nodeEnv: 'development' | 'test' | 'production';
@@ -22,6 +74,21 @@ export interface AppEnv {
   port: number;
   logLevel: z.infer<typeof envSchema>['LOG_LEVEL'];
   corsOrigins: string[];
+  /** Absent in EP00-style configs; every integration feature is then disabled (fail closed). */
+  integration?: IntegrationConfig;
+}
+
+/** Login exchange needs the LINE Login channel, the LIFF ID and a session secret. */
+export function isAuthConfigured(i: IntegrationConfig | undefined): i is IntegrationConfig & {
+  sessionSecret: string;
+  line: LineConfig & { loginChannelId: string; liffId: string };
+} {
+  return Boolean(i?.line.loginChannelId && i.line.liffId && i.sessionSecret);
+}
+
+/** Webhook verification needs the Messaging API channel secret. */
+export function isWebhookConfigured(i: IntegrationConfig | undefined): boolean {
+  return Boolean(i?.line.messagingChannelSecret);
 }
 
 export class EnvError extends Error {
@@ -64,6 +131,62 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
       problems.push(`CORS_ORIGINS: "${origin}" is not a valid origin`);
     }
   }
+  let publicBaseUrl: string | null = null;
+  if (e.PUBLIC_BASE_URL) {
+    try {
+      const u = new URL(e.PUBLIC_BASE_URL);
+      const loopbackHttp = u.protocol === 'http:' && LOOPBACK.has(u.hostname);
+      if (u.protocol !== 'https:' && !(loopbackHttp && e.NODE_ENV !== 'production')) {
+        problems.push(
+          'PUBLIC_BASE_URL: must use https (plain http is allowed only for loopback in development)',
+        );
+      } else {
+        publicBaseUrl = u.origin;
+      }
+    } catch {
+      problems.push('PUBLIC_BASE_URL: is not a valid URL');
+    }
+  }
+
+  const allowedLineUserIds = (e.FLOW_ALLOWED_LINE_USER_IDS ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+  if (allowedLineUserIds.some((id) => !/^U[0-9a-f]{32}$/.test(id))) {
+    problems.push('FLOW_ALLOWED_LINE_USER_IDS: every entry must be a LINE user ID (U + 32 hex)');
+  }
+
+  if (
+    e.LINE_LIFF_ID &&
+    e.LINE_LOGIN_CHANNEL_ID &&
+    !e.LINE_LIFF_ID.startsWith(`${e.LINE_LOGIN_CHANNEL_ID}-`)
+  ) {
+    problems.push('LINE_LIFF_ID: must belong to LINE_LOGIN_CHANNEL_ID');
+  }
+
+  const integration: IntegrationConfig = {
+    publicBaseUrl,
+    line: {
+      loginChannelId: e.LINE_LOGIN_CHANNEL_ID ?? null,
+      messagingChannelId: e.LINE_MESSAGING_CHANNEL_ID ?? null,
+      liffId: e.LINE_LIFF_ID ?? null,
+      messagingChannelSecret: e.LINE_MESSAGING_CHANNEL_SECRET ?? null,
+      channelAccessToken: e.LINE_CHANNEL_ACCESS_TOKEN ?? null,
+      botUserId: e.LINE_BOT_USER_ID ?? null,
+    },
+    sessionSecret: e.SESSION_SECRET ?? null,
+    allowedLineUserIds,
+    secretDir: e.FLOW_SECRET_DIR ?? null,
+    sessionAbsoluteMinutes: e.SESSION_ABSOLUTE_MINUTES,
+    sessionIdleMinutes: e.SESSION_IDLE_MINUTES,
+  };
+
+  if (e.NODE_ENV === 'production') {
+    if (!isAuthConfigured(integration))
+      problems.push('production requires LINE Login, LIFF and SESSION_SECRET configuration');
+    if (!publicBaseUrl) problems.push('production requires an https PUBLIC_BASE_URL');
+  }
+
   if (problems.length > 0) throw new EnvError(problems);
 
   return {
@@ -71,6 +194,10 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     host: e.API_HOST,
     port: e.API_PORT,
     logLevel: e.LOG_LEVEL,
-    corsOrigins,
+    corsOrigins:
+      publicBaseUrl && !corsOrigins.includes(publicBaseUrl)
+        ? [...corsOrigins, publicBaseUrl]
+        : corsOrigins,
+    integration,
   };
 }

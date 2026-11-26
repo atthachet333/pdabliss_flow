@@ -19,7 +19,34 @@ server-side. Every data access is scoped by explicit membership.
 | Mock data only, generic and clearly labelled                                                                                            | `apps/web/src/fixtures/mock.ts`                  | review                       |
 | UI: default destination is private. Viewer-only and inactive destinations cannot be chosen. Minimal disclosure also strips the alt text | `packages/shared`                                | shared and web tests         |
 
+## 1a. Implemented in EP01
+
+| Control                                                                                                                                  | Where                                                          | Test                                    |
+| ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------- |
+| Server-side LINE ID-token verification (official endpoint, local re-check of iss/aud/exp/iat/sub), profile from the client never trusted | `apps/api/src/line/id-token.ts`                                | `line-clients.test.ts`                  |
+| HttpOnly `__Host-` session cookie, rotation, idle/absolute expiry, revocation, hashed store keys                                         | `apps/api/src/auth/sessions.ts`, `http/security.ts`            | `auth.test.ts`                          |
+| CSRF token + exact origin allow-list on state-changing routes, login/session rate limits                                                 | `auth/routes.ts`, `auth/rate-limit.ts`                         | `auth.test.ts`                          |
+| Private access list, deny by default, local owner enrollment (no admin HTTP endpoint)                                                    | `auth/access.ts`, `cli/flow-access.ts`                         | `auth.test.ts`                          |
+| Webhook raw-body HMAC (constant time), destination check, dedupe, metadata only, no outbound                                             | `line/webhook.ts`                                              | `webhook.test.ts`                       |
+| Read-only Messaging adapter with timeouts and bounded retries, no send method                                                            | `line/messaging.ts`                                            | `line-clients.test.ts`                  |
+| External secret file refused inside the project or OneDrive and other synced folders, user-only ACL                                      | `config/secret-file.ts`, `scripts/ep01-setup-secrets.ps1`      | `config-and-gateway.test.ts`            |
+| Dev gateway allow-list (no `/dev`, maps, dotfiles, source, Vite tooling), LIFF-compatible CSP                                            | `apps/api/src/gateway.ts`                                      | `config-and-gateway.test.ts`, G09 smoke |
+| Secret scan incl. LINE IDs, channel secrets, long tokens, tunnel tokens and **full Git history**, plus real secret values vs builds      | `scripts/check-secrets.mjs`, `scripts/check-secret-values.mjs` | G08                                     |
+| Raw ID tokens never stored (memory only, POST body only), no session token in storage or URLs                                            | `apps/web/src/auth/*`                                          | `auth-flow.test.ts`                     |
+
+| Rate-limit identity: valid `CF-Connecting-IP` → `x-flow-client-ip` (gateway drops client forwarding headers); API trusts it only from loopback as an IP literal; `trustProxy` false | `gateway.ts`, `http/security.ts` | `auth.test.ts` (F05), `config-and-gateway.test.ts` |
+| Client request discipline: single flight, 429 → countdown screen K (validated `Retry-After`), retry cooldown, no automatic retries | `apps/web/src/auth/flow.ts`, `api-client.ts`, `AuthScreen.tsx` | `auth-flow.test.ts` |
+| Logout ends the server session; the old cookie cannot be reused; membership is untouched | `auth/routes.ts`, `auth/sessions.ts` | `auth.test.ts` (F07) |
+| Access CLI never rebuilds the API build during a recorded integration session | `scripts/flow-access.mjs` | sandbox check (EP01-REPORT §D) |
+
+Details: [EP01-ARCHITECTURE.md](EP01-ARCHITECTURE.md). For the production audit, see the
+remaining limitations in [EP01-REPORT.md](EP01-REPORT.md) §I: loopback header trust, NAT-shared
+per-IP budgets and in-memory stores.
+
 ## 2. Planned (not implemented; do not treat as present)
+
+> Authentication, webhooks and rate limiting below are **now implemented** (§1a). The remaining
+> items (EP03+ authorization, scheduling, persistent stores, data protection) are still planned.
 
 **Authentication (EP01).** The LIFF app sends the **ID token** (or access token) and never the
 profile. The server verifies it with LINE (`POST /oauth2/v2.1/verify` for ID tokens) and checks
@@ -70,7 +97,7 @@ The project folder is synced by OneDrive, and `.gitignore` does **not** stop syn
 
 1. Keep real values in `%USERPROFILE%\.pdabliss\flow\dev.env`, outside OneDrive. Restrict its
    ACL to your Windows user.
-2. The API loads `FLOW_ENV_FILE` (path) at startup when set. The project contains only
+2. The API loads `%USERPROFILE%\.pdabliss\flow\dev.env` (or `FLOW_ENV_FILE`) at startup and refuses synced locations. Create it with `scripts\ep01-setup-secrets.ps1`. The project contains only
    `.env.example` with placeholders.
 3. Production secrets live only on the production server (EP07). They are never copied to the
    workstation.

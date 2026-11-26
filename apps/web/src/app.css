@@ -1667,3 +1667,230 @@ code {
 .today__hello .sally-img--expression {
   border-radius: 14px;
 }
+
+/* ================================================================ EP01 auth */
+.auth {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  justify-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-4) calc(var(--sp-6) + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(120% 60% at 50% 0%, var(--sally-ice) 0%, transparent 60%), var(--canvas);
+}
+.auth__bar {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  justify-content: center;
+  padding-top: var(--sp-2);
+}
+.auth__mark {
+  width: 96px;
+}
+.auth__sig {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  text-align: center;
+}
+.auth-card {
+  width: 100%;
+  max-width: 440px;
+  align-self: center;
+  display: grid;
+  justify-items: center;
+  gap: var(--sp-4);
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-2);
+  padding: var(--sp-8) var(--sp-5);
+}
+.auth-card__art .sally-img--portrait {
+  width: 176px;
+  height: 176px;
+}
+.auth-card__art .sally-img--expression {
+  border-radius: var(--r-lg);
+  background: var(--sally-ice);
+}
+.auth-card__title {
+  font-size: var(--fs-xl);
+  max-width: 22ch;
+  text-wrap: balance;
+}
+.auth-card p {
+  max-width: 34ch;
+}
+.auth-card .f-notice {
+  text-align: left;
+  width: 100%;
+}
+.auth-card .f-btn {
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
+}
+.auth-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  border-radius: var(--r-pill);
+  background: var(--cat-brand-tint);
+  color: var(--flow-emerald-700);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+.auth-ref {
+  white-space: nowrap; /* a reference code must never break across lines */
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: clamp(1.125rem, 5.6vw, var(--fs-2xl));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--flow-forest);
+  background: var(--cat-brand-tint);
+  border: 1px dashed var(--flow-emerald-700);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-4);
+  max-width: 100%;
+}
+.auth-owner {
+  width: 100%;
+  display: grid;
+  gap: var(--sp-3);
+  justify-items: start;
+  text-align: left;
+  border-top: 1px solid var(--line);
+  padding-top: var(--sp-4);
+}
+.auth-owner__title {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--flow-emerald-700);
+}
+.auth-dl {
+  margin: 0;
+  width: 100%;
+  display: grid;
+  gap: var(--sp-2);
+}
+.auth-dl > div {
+  display: grid;
+  gap: 2px;
+}
+.auth-dl dt {
+  font-size: var(--fs-xs);
+  color: var(--ink-muted);
+}
+.auth-dl dd {
+  margin: 0;
+}
+.auth-progress {
+  display: flex;
+  gap: 8px;
+}
+.auth-progress span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--flow-emerald);
+  animation: auth-dot 1.2s var(--ease-out) infinite;
+}
+.auth-progress span:nth-child(2) {
+  animation-delay: 0.15s;
+  background: var(--sally-muted-blue);
+}
+.auth-progress span:nth-child(3) {
+  animation-delay: 0.3s;
+  background: var(--flow-mint);
+}
+@keyframes auth-dot {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-progress span {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* dev-only auth state gallery */
+.auth-states {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: var(--sp-6) var(--sp-4) var(--sp-16);
+}
+.auth-states__head {
+  display: grid;
+  gap: var(--sp-3);
+  justify-items: start;
+  margin-bottom: var(--sp-6);
+}
+.auth-states__head h1 {
+  font-size: var(--fs-xl);
+}
+.auth-states__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: var(--sp-6);
+}
+.auth-states__item {
+  margin: 0;
+  display: grid;
+  gap: var(--sp-2);
+  align-content: start;
+}
+.auth-states__item figcaption {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+.auth--framed {
+  min-height: auto;
+  border-radius: var(--r-xl);
+  border: 1px solid var(--line);
+  padding: var(--sp-4);
+}
+
+/* EP01 K — rate-limit countdown */
+.auth-countdown {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md);
+  background: var(--cat-brand-tint);
+  color: var(--flow-forest);
+  font-weight: 600;
+  text-align: center;
+}
+.auth-card .auth-countdown {
+  justify-self: stretch;
+  max-width: none;
+}
+.auth-countdown__value {
+  display: block;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* /dev/auth-states has no sidebar: keep it single-column at every width (the design
+   showcase's 236px + 1fr grid squeezed the states into the sidebar column ≥ 1100px). */
+.sc.sc--single {
+  display: block;
+}

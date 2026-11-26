@@ -124,7 +124,8 @@ describe('API application', () => {
 
   it('exposes no endpoint that sends notifications', () => {
     const routes = app.printRoutes({ commonPrefix: false });
-    assert.ok(!/notif|send|push|line|webhook/i.test(routes), routes);
+    // EP01 adds receive-only LINE routes (webhook, status); nothing may send messages.
+    assert.ok(!/notif|send|push|reply|multicast|broadcast|narrowcast/i.test(routes), routes);
   });
 });
 

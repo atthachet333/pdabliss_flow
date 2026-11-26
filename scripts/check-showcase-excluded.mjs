@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dist = fileURLToPath(new URL('../apps/web/dist', import.meta.url));
-const MARKERS = ['FLOW_DESIGN_SHOWCASE_DEV_ONLY', '/dev/design-showcase', 'Design Showcase'];
+const MARKERS = [
+  'FLOW_DESIGN_SHOWCASE_DEV_ONLY',
+  '/dev/design-showcase',
+  'Design Showcase',
+  'FLOW_AUTH_STATES_DEV_ONLY',
+  '/dev/auth-states',
+];
 
 if (!existsSync(dist)) {
   console.error('apps/web/dist not found — run the web production build first.');
