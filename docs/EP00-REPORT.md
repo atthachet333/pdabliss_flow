@@ -248,7 +248,7 @@ and backups (SECURITY-AND-PRIVACY.md).
 | Item                      | Value                                                                       |
 | ------------------------- | --------------------------------------------------------------------------- |
 | Branch                    | `main` (created by `scripts\ep00-commit.ps1` if no repository exists)       |
-| EP00 foundation commit    | `PENDING_EP00_COMMIT`                                                       |
+| EP00 foundation commit    | `d6776f60c9bb5e95bf36e3b6f95c00743902b0b2`                                                       |
 | Follow-up commit          | Writes this hash into the report (made automatically by the same script)    |
 | Author                    | The owner's configured Git identity (`git config user.name` / `user.email`) |
 | Remote / push             | **None.** No remote is configured and nothing is pushed                     |
