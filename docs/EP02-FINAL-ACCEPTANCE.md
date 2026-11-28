@@ -1,28 +1,61 @@
 # EP02 — Final acceptance (real LINE, owner-dependent)
 
-_Prepared 2026-11-28, Asia/Bangkok. Nothing in this file has been run yet. Each item needs the
+_Prepared 2026-11-28, Asia/Bangkok. Updated the same day with the owner's desktop review
+(below). Each item needs the
 owner's own iPhone or desktop and owner-approved LINE test identities. **No result may be
 recorded as passed without evidence.** Use synthetic appointments and bills only._
 
 ## Status at the EP02 consolidated checkpoint
 
-| Item                                                                                      | Status                                    |
-| ----------------------------------------------------------------------------------------- | ----------------------------------------- |
-| LINE login, owner bootstrap, Today/Calendar/Groups/Settings, create, reschedule, previews | PASS — owner-reported, 26 Nov (unchanged) |
-| Close/reopen LIFF, session restoration                                                    | NOT TESTED                                |
-| Logout and re-login persistence                                                           | NOT TESTED                                |
-| Complete appointment history (create + reschedule events)                                 | NOT TESTED                                |
-| Full mobile Owner Console                                                                 | NOT TESTED                                |
-| Desktop Administration Center via external-browser LINE login                             | NOT TESTED                                |
-| Second identity: access request → owner approval                                          | NOT TESTED                                |
-| Invitation redemption and replay refusal                                                  | NOT TESTED                                |
-| Real multi-user privacy (Today, Calendar, Search, direct URL)                             | NOT TESTED                                |
-| Member colour selection                                                                   | NOT TESTED                                |
-| Recurring appointment creation and scoped edit                                            | NOT TESTED                                |
-| Recurring monthly bill, mark one occurrence paid                                          | NOT TESTED                                |
-| Offboarding behaviour (remove / suspend / revoke / reactivate)                            | NOT TESTED                                |
-| iPhone LIFF regression of RD01–RD06/RD08                                                  | NOT TESTED                                |
-| Canonical LIFF endpoint restored, **Use webhook** off, outbound usage review              | PENDING owner confirmation                |
+| Item                                                                                      | Status                                                                      |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| LINE login, owner bootstrap, Today/Calendar/Groups/Settings, create, reschedule, previews | PASS — owner-reported, 26 Nov (unchanged)                                   |
+| Close/reopen LIFF, session restoration                                                    | NOT TESTED                                                                  |
+| Logout and re-login persistence                                                           | NOT TESTED                                                                  |
+| Complete appointment history (create + reschedule events)                                 | NOT TESTED                                                                  |
+| Full mobile Owner Console                                                                 | NOT TESTED                                                                  |
+| Desktop Administration Center review (owner, 28 Nov)                                      | PARTIAL — 8/10 owner-reported PASS; ADM08/ADM09 fixed, owner retest pending |
+| External-browser LINE login returning to `/admin` (scenario J)                            | NOT SEPARATELY REPORTED                                                     |
+| Shared workspace creation; invitation creation and sharing                                | PASS — owner-reported, 28 Nov                                               |
+| Second identity: access request → owner approval (AUTH01)                                 | DEFERRED / NOT VERIFIED (owner decision)                                    |
+| Invitation redemption and replay refusal                                                  | NOT TESTED (needs a second identity)                                        |
+| Real multi-user privacy (Today, Calendar, Search, direct URL)                             | NOT TESTED                                                                  |
+| Member colour selection                                                                   | NOT TESTED                                                                  |
+| Recurring appointment creation and scoped edit                                            | NOT TESTED                                                                  |
+| Recurring monthly bill, mark one occurrence paid                                          | NOT TESTED                                                                  |
+| Offboarding behaviour (remove / suspend / revoke / reactivate)                            | NOT TESTED                                                                  |
+| iPhone LIFF regression of RD01–RD06/RD08                                                  | NOT TESTED                                                                  |
+| Canonical LIFF endpoint restored, **Use webhook** off, outbound usage review              | PENDING owner confirmation                                                  |
+
+## Owner desktop review and findings register (28 Nov 2026)
+
+Owner-reported on the temporary integration session (checkpoint `7dc5012`):
+
+- All 14 reviewed admin pages render.
+- All 13 dashboard KPI cards are clickable, and back navigation works.
+- Owner account details work, and owner self-revocation protection works.
+- Activity Center filters work.
+- Shared workspace creation works.
+- Invitation creation and sharing work.
+
+Desktop functional acceptance: **8/10 PASS**.
+
+| ID                        | Finding                                      | Root cause (investigated)                                                                                                                                                                                                                                                                                                                                                                                          | Disposition                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADM08                     | Quota "อ่านใหม่" gave no observable response   | The click did reach the server: the live API log shows 12 × `GET /admin/quota`, all 200 in 160–330 ms (real LINE reads; the server does not cache). The page used `useLoad.reload()`, which kept the old data on screen with no loading indicator, no result message and no single-flight guard (a second click sent a second LINE read). Timestamps had minute precision, so an unchanged quota looked identical. | **Fixed.** A single-flight `RefreshController` provides: a loading line "กำลังอ่านข้อมูลโควตาจาก LINE..."; a disabled, busy button; success "อัปเดตข้อมูลโควตาเรียบร้อยแล้ว" only after a successful LINE read; failure "ไม่สามารถอ่านข้อมูลล่าสุดได้ กรุณาลองใหม่อีกครั้ง" that keeps the previous values, labelled stale; last success advancing only on success; second-precision timestamps. **Owner retest pending.** |
+| ADM09                     | Health "ตรวจใหม่" gave no observable response | Same UI cause. The server re-checks the database on every request (4 × `GET /admin/health`, all 200).                                                                                                                                                                                                                                                                                                              | **Fixed** with the same controller: "กำลังตรวจสอบสถานะระบบ...", then "ตรวจสอบสถานะระบบเรียบร้อยแล้ว" only when the check completed and the database is OK. A degraded database shows a caution, never success. A failed check shows "ไม่สามารถตรวจสอบสถานะระบบได้", keeps the previous result and marks it stale. The worker stays "ยังไม่เปิดใช้งาน — ไม่ได้ทำงาน". **Owner retest pending.**                   |
+| ADM03                     | Sticky header may hide page headings         | Confirmed in Chromium and WebKit at 1280×720. (1) No scroll reset between admin routes: from a scrolled page, an immediately rendered page (Permissions) opened mid-page with its heading off-screen. (2) `main.focus()` and the skip link aligned the content to the viewport top, under the 49 px sticky header. The logo, independent sidebar scrolling and footer access measured correct.                     | **Fixed.** Scroll to top on every admin route change; focus with `preventScroll`; `scroll-padding-top` / `scroll-margin-top` for the header. The title is now below the header after scroll + navigation, back navigation, static pages and the skip link, in both engines. **Owner retest pending.**                                                                                                |
+| AUTH01                    | Second LINE identity authentication          | Not investigated (owner instruction).                                                                                                                                                                                                                                                                                                                                                                              | **DEFERRED / NOT VERIFIED.** No LINE Login publishing, role, credential or invitation-auth changes.                                                                                                                                                                                                                                                                                                  |
+| ADM01, ADM02, ADM04–ADM07 | Owner polish items                           | —                                                                                                                                                                                                                                                                                                                                                                                                                  | Moved to the EP04 consolidated polish backlog (owner decision).                                                                                                                                                                                                                                                                                                                                      |
+
+Hotfix evidence:
+
+- Browser checks `.qa/ep02-consolidated/admin-hotfix-qa.ts` (local, synthetic data, a fake LINE
+  reader for quota): **before** 18 findings; **after 0 findings** in Chromium and WebKit
+  (`.qa/ep02-consolidated/hotfix/`).
+- New unit tests: web `admin-refresh.test.ts` (6) and API `admin-quota-health.test.ts` (3).
+- Full verifier: 31 PASS, 1 intentional skip, exit 0. Tests 309/309 plus 49/49 real MariaDB.
+  npm audits 0. Secret scans pass.
 
 ## Before any public session (explicit owner approval required)
 

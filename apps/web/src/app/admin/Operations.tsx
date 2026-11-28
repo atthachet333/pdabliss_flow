@@ -11,6 +11,8 @@ import { Button, Notice } from '../../components/ui';
 import { KIND_TEXT, STATUS_TEXT, todayLocal, useApp, useLoad } from '../core';
 import { fireText, REMINDER_STATUS_TEXT } from '../extras';
 import { AdminPage, ErrorBox, NotEnabled } from './AdminCenter';
+import { HEALTH_REFRESH, preciseText, QUOTA_REFRESH, RefreshStatus } from './refresh-ui';
+import { useRefresh } from './refresh';
 
 const STATUSES: ReminderRuleStatus[] = [
   'SCHEDULED',
@@ -263,22 +265,25 @@ export function NotificationsPage() {
 
 export function QuotaPage() {
   const { api } = useApp();
-  const load = useLoad(() => api.quota(), 'adm-quota');
-  const q = load.data;
+  const r = useRefresh(() => api.quota(), QUOTA_REFRESH);
+  const q = r.data;
   return (
     <AdminPage
       title="โควตาข้อความ LINE"
-      intro="อ่านจาก LINE Official Account โดยตรงฝั่งเซิร์ฟเวอร์ (โควตาและการใช้งานเดือนนี้) — ไม่มีการส่งข้อความ ไม่มีการอัปเกรดแพ็กเกจอัตโนมัติ และ token ไม่ออกจากเซิร์ฟเวอร์"
+      intro="อ่านจาก LINE Official Account โดยตรงฝั่งเซิร์ฟเวอร์ (โควตาและการใช้งานเดือนนี้) — ทุกครั้งที่กด “อ่านใหม่” คือการอ่านจาก LINE จริง ไม่ใช่ค่าที่จำไว้ ไม่มีการส่งข้อความ ไม่มีการอัปเกรดแพ็กเกจอัตโนมัติ และ token ไม่ออกจากเซิร์ฟเวอร์"
       actions={
-        <Button icon={RefreshCw} onClick={load.reload}>
+        <Button icon={RefreshCw} busy={r.busy} disabled={r.busy} onClick={r.refresh}>
           อ่านใหม่
         </Button>
       }
     >
-      {load.state === 'error' && !q ? (
-        <ErrorBox error={load.error} onRetry={load.reload} />
-      ) : !q ? (
-        <p aria-busy="true">กำลังอ่านจาก LINE…</p>
+      <RefreshStatus r={r} busyText="กำลังอ่านข้อมูลโควตาจาก LINE..." />
+      {!q ? (
+        r.phase === 'idle' && r.error ? (
+          <ErrorBox error={r.error} onRetry={r.refresh} />
+        ) : (
+          <p aria-busy="true">กำลังอ่านข้อมูลโควตาจาก LINE...</p>
+        )
       ) : (
         <>
           {q.status === 'not-configured' ? (
@@ -287,14 +292,14 @@ export function QuotaPage() {
             </Notice>
           ) : q.status === 'unavailable' ? (
             <Notice tone="caution">
-              อ่านโควตาจาก LINE ไม่ได้ในขณะนี้ ({q.errorKind}) — ยังไม่เคยอ่านสำเร็จในรอบนี้
+              อ่านโควตาจาก LINE ไม่ได้ในขณะนี้ ({q.errorKind}) — ยังไม่เคยอ่านสำเร็จ
             </Notice>
           ) : (
-            <section className="adm-card adm-quota">
-              {q.status === 'stale' ? (
+            <section className="adm-card adm-quota" data-last-success={q.lastSuccessAt ?? ''}>
+              {q.status === 'stale' || r.stale ? (
                 <Notice tone="caution">
-                  อ่านล่าสุดไม่สำเร็จ ({q.errorKind}) — แสดงค่าที่อ่านได้ครั้งล่าสุดเมื่อ{' '}
-                  {q.lastSuccessAt ? fireText(q.lastSuccessAt) : '—'}
+                  ข้อมูลเก่า — อ่านล่าสุดไม่สำเร็จ{q.errorKind ? ` (${q.errorKind})` : ''}{' '}
+                  แสดงค่าที่อ่านได้สำเร็จครั้งล่าสุดเมื่อ {q.lastSuccessAt ? preciseText(q.lastSuccessAt) : '—'}
                 </Notice>
               ) : null}
               <p className="adm-quota__big f-num">
@@ -322,8 +327,8 @@ export function QuotaPage() {
                 <dd className="f-num">{q.percent !== null ? `${q.percent}%` : '—'}</dd>
                 <dt>เดือนที่รายงาน</dt>
                 <dd className="f-num">{q.month ?? '—'}</dd>
-                <dt>อ่านสำเร็จล่าสุด</dt>
-                <dd className="f-num">{q.lastSuccessAt ? fireText(q.lastSuccessAt) : '—'}</dd>
+                <dt>อ่านจาก LINE สำเร็จล่าสุด</dt>
+                <dd className="f-num">{q.lastSuccessAt ? preciseText(q.lastSuccessAt) : '—'}</dd>
               </dl>
               {q.limit !== null && q.used !== null && q.used >= q.limit ? (
                 <Notice tone="block">โควตาเดือนนี้เต็มแล้ว — ระบบส่ง (EP03) ต้องหยุดส่งจนถึงเดือนใหม่</Notice>
@@ -336,7 +341,6 @@ export function QuotaPage() {
               และบันทึกการส่งของ FLOW จะเปิดพร้อมระบบส่งใน EP03
             </p>
           </NotEnabled>
-          <p className="adm-fine">ตรวจสอบเมื่อ {fireText(q.checkedAt)}</p>
         </>
       )}
     </AdminPage>
@@ -497,8 +501,8 @@ export function FriendsPage() {
 
 export function HealthPage() {
   const { api } = useApp();
-  const load = useLoad(() => api.health(), 'adm-health');
-  const h = load.data;
+  const r = useRefresh(() => api.health(), HEALTH_REFRESH);
+  const h = r.data;
   const row = (label: string, ok: boolean | null, text: string) => (
     <tr>
       <th scope="row">{label}</th>
@@ -514,29 +518,37 @@ export function HealthPage() {
   return (
     <AdminPage
       title="สถานะระบบ"
-      intro="ข้อมูลสุขภาพที่ปลอดภัยเท่านั้น — ไม่มีรหัสผ่าน token ที่อยู่เซิร์ฟเวอร์ หรือรายละเอียดภายใน"
+      intro="ทุกครั้งที่กด “ตรวจใหม่” คือการตรวจ API และฐานข้อมูลจริงในขณะนั้น — แสดงเฉพาะข้อมูลที่ปลอดภัย ไม่มีรหัสผ่าน token ที่อยู่เซิร์ฟเวอร์ หรือรายละเอียดภายใน"
       actions={
-        <Button icon={RefreshCw} onClick={load.reload}>
+        <Button icon={RefreshCw} busy={r.busy} disabled={r.busy} onClick={r.refresh}>
           ตรวจใหม่
         </Button>
       }
     >
-      {load.state === 'error' && !h ? (
-        <ErrorBox error={load.error} onRetry={load.reload} />
-      ) : !h ? (
-        <p aria-busy="true">กำลังตรวจ…</p>
+      <RefreshStatus r={r} busyText="กำลังตรวจสอบสถานะระบบ..." />
+      {!h ? (
+        r.phase === 'idle' && r.error ? (
+          <ErrorBox error={r.error} onRetry={r.refresh} />
+        ) : (
+          <p aria-busy="true">กำลังตรวจสอบสถานะระบบ...</p>
+        )
       ) : (
         <section className="adm-card">
+          {r.stale ? (
+            <Notice tone="caution">
+              ผลด้านล่างเป็นผลการตรวจครั้งก่อน — การตรวจล่าสุดไม่สำเร็จ จึงไม่ยืนยันว่าระบบทำงานปกติในขณะนี้
+            </Notice>
+          ) : null}
           <table className="adm-table adm-table--kv">
             <tbody>
               {row(
                 'API',
-                true,
-                `ทำงาน · เวอร์ชัน ${h.api.version} · เปิดมาแล้ว ${Math.round(h.api.uptimeSeconds / 60)} นาที`,
+                r.stale ? null : true,
+                `${r.stale ? 'ไม่ทราบสถานะปัจจุบัน · ' : 'ทำงาน · '}เวอร์ชัน ${h.api.version} · เปิดมาแล้ว ${Math.round(h.api.uptimeSeconds / 60)} นาที`,
               )}
               {row(
                 'ฐานข้อมูล MariaDB',
-                h.database.status === 'ok',
+                r.stale ? null : h.database.status === 'ok',
                 h.database.status === 'ok' ? `ตอบสนองใน ${h.database.latencyMs} ms` : 'ไม่พร้อมใช้งาน',
               )}
               {row(
@@ -555,12 +567,10 @@ export function HealthPage() {
                 h.line.webhook === 'configured' ? 'ตั้งค่าแล้ว' : 'ยังไม่ตั้งค่า',
               )}
               {row('การส่งข้อความออก', null, 'ปิดอยู่ (EP02 ไม่ส่งข้อความ)')}
-              {row('Worker ระบบส่งแจ้งเตือน', null, 'ยังไม่เปิดใช้งาน (EP03)')}
+              {row('Worker ระบบส่งแจ้งเตือน', null, 'ยังไม่เปิดใช้งาน (EP03) — ไม่ได้ทำงาน')}
             </tbody>
           </table>
-          <p className="adm-fine">
-            ตรวจเมื่อ {fireText(h.checkedAt)} · “ยังไม่เปิดใช้งาน” ไม่ได้หมายความว่าทำงานปกติ
-          </p>
+          <p className="adm-fine">“ยังไม่เปิดใช้งาน” ไม่ได้หมายความว่าทำงานปกติ</p>
         </section>
       )}
     </AdminPage>

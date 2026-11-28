@@ -230,10 +230,13 @@ export default function AdminCenter() {
   const mainRef = useRef<HTMLElement>(null);
   const [first, setFirst] = useState(true);
   const match = TITLES.find(([re]) => re.test(location.pathname));
-  // Focus moves to the page content on navigation (not on the very first render).
+  // ADM03: every route change starts at the top of the page (the previous page's scroll
+  // position used to carry over and hide the new heading), and focus moves to the content
+  // without scrolling it under the sticky header.
   useEffect(() => {
+    window.scrollTo(0, 0);
     if (first) return setFirst(false);
-    mainRef.current?.focus();
+    mainRef.current?.focus({ preventScroll: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
   const pending = me.adminBadge?.pendingRequests ?? 0;
