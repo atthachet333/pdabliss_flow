@@ -141,7 +141,15 @@ Canonical LIFF endpoint and webhook-off confirmation remain pending with the own
 
 ## I. Git
 
-_Filled in after commit and push._
+- Start: `main` fast-forwarded from `c9aebb4` to `22dc6b7` (three docs-only roadmap commits,
+  verified before syncing).
+- Checkpoint: `c81f3e8` "feat(ep02): consolidated application and administration center
+  checkpoint" (74 files), pushed normally with no force. Local HEAD equalled `origin/main` after
+  the push.
+- Pre-commit review: the remote had no new commits. The staged diff contained no environment
+  files, build output, `.qa` evidence, generated client, LINE identifiers, tunnel URLs or
+  credentials. File, history and value secret scans passed.
+- This Git section is recorded in a follow-up docs-only commit.
 
 ## J. EP03 handover
 
