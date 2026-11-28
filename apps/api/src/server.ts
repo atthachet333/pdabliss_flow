@@ -73,7 +73,7 @@ async function main() {
   // Bounded storage (sessions, rate-limit windows, webhook ids, idempotency keys).
   const housekeeping = store
     ? setInterval(() => {
-        runHousekeeping(store, new Date()).then(
+        runHousekeeping(store, new Date(), app.flowExtendSeries).then(
           (n) => app.log.info({ purged: n }, 'Housekeeping'),
           (e: unknown) =>
             app.log.warn(

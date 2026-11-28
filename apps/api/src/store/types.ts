@@ -26,7 +26,12 @@ export type AppointmentVisibility = 'PRIVATE' | 'WORKSPACE' | 'SELECTED';
 export type AppointmentStatus = 'SCHEDULED' | 'CANCELLED';
 export type ContentPolicy = 'FULL' | 'PRIVACY_SAFE';
 export type ReminderKind = 'RELATIVE' | 'CALENDAR';
-export type ReminderStatus = 'SCHEDULED' | 'PAST' | 'DISABLED' | 'DUPLICATE' | 'CANCELLED';
+export type ReminderStatus =
+  'SCHEDULED' | 'PAST' | 'DISABLED' | 'DUPLICATE' | 'CANCELLED' | 'SUPPRESSED';
+export type AppointmentKind = 'EVENT' | 'BILL';
+export type PaymentStatus = 'UNPAID' | 'PAID';
+export type RecurrenceFrequency = 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+export type SeriesStatus = 'ACTIVE' | 'ENDED' | 'CANCELLED';
 export type AppointmentEventType =
   | 'CREATED'
   | 'UPDATED'
@@ -34,7 +39,8 @@ export type AppointmentEventType =
   | 'CANCELLED'
   | 'REMINDERS_CHANGED'
   | 'VISIBILITY_CHANGED'
-  | 'DESTINATIONS_CHANGED';
+  | 'DESTINATIONS_CHANGED'
+  | 'PAYMENT_CHANGED';
 
 export interface UserRow {
   id: string;
@@ -116,6 +122,8 @@ export interface MemberRow {
   role: WorkspaceRole;
   status: MemberStatus;
   addedByUserId: string | null;
+  /** Member identity colour token for this workspace (validated id) or null = default. */
+  colorToken: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -163,6 +171,46 @@ export interface AppointmentRow {
   updatedAt: Date;
   cancelledAt: Date | null;
   cancelledByUserId: string | null;
+  kind: AppointmentKind;
+  seriesId: string | null;
+  /** YYYY-MM-DD generated local date (stable occurrence identity). */
+  occurrenceDate: string | null;
+  isException: boolean;
+  /** Exact decimal string "1250.00" (BILL only). */
+  amount: string | null;
+  currency: string | null;
+  paymentStatus: PaymentStatus | null;
+  paidAt: Date | null;
+  paidByUserId: string | null;
+}
+
+export interface SeriesRow {
+  id: string;
+  workspaceId: string;
+  createdByUserId: string;
+  kind: AppointmentKind;
+  frequency: RecurrenceFrequency;
+  interval: number;
+  /** 1–31, -1 = last day of month, null = start date's day (MONTHLY only). */
+  monthDay: number | null;
+  missingDayPolicy: 'LAST_DAY' | 'SKIP';
+  endType: 'NEVER' | 'UNTIL' | 'COUNT';
+  untilDate: string | null;
+  occurrenceCount: number | null;
+  startDate: string;
+  /** Validated occurrence template (appointment content). */
+  template: unknown;
+  generatedThrough: string | null;
+  status: SeriesStatus;
+  version: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Operational reminder row for the Activity Center (projected and redacted by the domain). */
+export interface ReminderActivityRow {
+  rule: ReminderRuleRow;
+  bundle: AppointmentBundle;
 }
 
 export interface AppointmentAccessRow {
@@ -301,6 +349,8 @@ export interface Store {
   ): Promise<UserRow | null>;
   listUsers(q: {
     statuses?: UserStatus[];
+    globalRoles?: GlobalRole[];
+    ids?: string[];
     text?: string;
     limit: number;
     offset?: number;
@@ -382,9 +432,10 @@ export interface Store {
   updateMember(
     workspaceId: string,
     userId: string,
-    patch: Partial<Pick<MemberRow, 'role' | 'status'>>,
+    patch: Partial<Pick<MemberRow, 'role' | 'status' | 'colorToken'>>,
     now: Date,
   ): Promise<MemberRow | null>;
+  countWorkspaces(q: { statuses?: WorkspaceStatus[]; kinds?: WorkspaceKind[] }): Promise<number>;
 
   // destinations
   getDestination(id: string): Promise<DestinationRow | null>;
@@ -433,6 +484,48 @@ export interface Store {
   getAppointmentBundles(ids: string[]): Promise<AppointmentBundle[]>;
   appendAppointmentEvent(row: AppointmentEventRow): Promise<void>;
   listAppointmentEvents(appointmentId: string, limit: number): Promise<AppointmentEventRow[]>;
+  /** Bulk insert of generated occurrences (one statement per table). */
+  createAppointments(bundles: AppointmentBundle[]): Promise<void>;
+  appendAppointmentEvents(rows: AppointmentEventRow[]): Promise<void>;
+  /** Hard-deletes derived occurrences (children cascade). Only for untouched generated rows. */
+  deleteAppointments(ids: string[]): Promise<number>;
+  /** Every occurrence of a series (all statuses) with occurrenceDate ≥ fromDate when given. */
+  listSeriesOccurrences(seriesId: string, fromDate?: string): Promise<AppointmentBundle[]>;
+  /** Re-points occurrences to another series (FUTURE split). */
+  moveOccurrences(ids: string[], seriesId: string): Promise<number>;
+
+  // recurring series
+  createSeries(row: SeriesRow): Promise<void>;
+  getSeries(id: string): Promise<SeriesRow | null>;
+  /** Optimistic on version; increments it. */
+  updateSeries(
+    id: string,
+    expectedVersion: number,
+    patch: Partial<
+      Omit<SeriesRow, 'id' | 'version' | 'createdAt' | 'createdByUserId' | 'workspaceId'>
+    >,
+    now: Date,
+  ): Promise<SeriesRow | null>;
+  /** ACTIVE series whose materialization stops before `before` (horizon extension). */
+  listSeriesNeedingExtension(before: string, limit: number): Promise<SeriesRow[]>;
+
+  // operations (Platform Administration Center; callers redact)
+  listReminderActivity(q: {
+    fireFrom: Date;
+    fireTo: Date;
+    statuses?: ReminderStatus[];
+    workspaceIds?: string[];
+    limit: number;
+    offset?: number;
+  }): Promise<ReminderActivityRow[]>;
+  countReminderRules(q: {
+    statuses?: ReminderStatus[];
+    fireFrom?: Date;
+    fireTo?: Date;
+  }): Promise<Partial<Record<ReminderStatus, number>>>;
+  countAudit(q: { since: Date }): Promise<number>;
+  listIdentities(userIds: string[]): Promise<LineIdentityRow[]>;
+  countOpenSessions(userId: string, now: Date): Promise<number>;
 
   // idempotency
   getIdempotency(userId: string, scope: string, key: string): Promise<IdempotencyRow | null>;

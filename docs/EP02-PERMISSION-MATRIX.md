@@ -100,3 +100,21 @@ before `FULL` content goes to a group; notes are never sent anywhere.
 
 (Owner and global admin are deliberately **not** members of the test workspace: global roles
 grant no workspace or appointment access.)
+
+## EP02 consolidated additions
+
+| Action                                                              | Owner                      | G-Admin                            | WS-Admin | Member | Viewer |
+| ------------------------------------------------------------------- | -------------------------- | ---------------------------------- | -------- | ------ | ------ |
+| Change own member colour in a workspace                             | own                        | own                                | own      | own    | own    |
+| Change another member's colour                                      | –                          | –                                  | –        | –      | –      |
+| Mark a visible bill occurrence paid/unpaid                          | –\*                        | –\*                                | ✓†       | own†   | –      |
+| `/admin` dashboard, requests, users, workspaces, audit              | ✓                          | ✓                                  | –        | –      | –      |
+| Activity Center, quota, friends, health, notifications, LINE groups | ✓                          | –                                  | –        | –      | –      |
+| Status, role and membership-removal writes                          | recent LINE login required | recent login (ordinary users only) | –        | –      | –      |
+
+\* Global roles grant no appointment access. † The same rule as editing: the creator, or a
+workspace admin for WORKSPACE-visible items.
+
+Revocation removes non-personal memberships, global ADMIN and group grants, and disables the
+private chat. Reactivation grants only explicitly reviewed memberships. Suspension disables the
+private chat and keeps memberships.

@@ -11,6 +11,20 @@ export interface RequestAuth {
   sessionId: string;
   csrfToken: string;
   expiresAt: Date;
+  /** When this session was created by a server-verified LINE login (login rotates it). */
+  authenticatedAt: Date;
+}
+
+/**
+ * Sensitive privileged operations (account status, global roles, offboarding) require a
+ * LINE login within this window. Older sessions get 403 REAUTH_REQUIRED and the client
+ * re-verifies with LINE (a new session), then retries. No second password system exists.
+ */
+export const RECENT_AUTH_MS = 15 * 60_000;
+
+export function requireRecentAuth(auth: RequestAuth, now: Date): void {
+  if (now.getTime() - auth.authenticatedAt.getTime() > RECENT_AUTH_MS)
+    throw new ApiError(403, 'REAUTH_REQUIRED', 'Please confirm your identity with LINE again');
 }
 
 export async function loadActor(store: Store, userId: string): Promise<Actor | null> {
@@ -61,6 +75,7 @@ export async function authenticate(
     sessionId: resolved.sessionId,
     csrfToken: deps.sessions.csrfFor(resolved.sessionId),
     expiresAt: deps.sessions.expiresAt(resolved.session),
+    authenticatedAt: resolved.session.createdAt,
   };
 }
 

@@ -27,6 +27,7 @@ const TABLES = [
   'appointment_destinations',
   'appointment_access',
   'appointments',
+  'appointment_series',
   'destination_grants',
   'line_destinations',
   'workspace_members',

@@ -6,6 +6,7 @@ const replayDiff = [
   '-- AlterTable\r\nALTER TABLE `appointment_events` MODIFY `fields` JSON NULL;',
   '-- AlterTable\r\nALTER TABLE `audit_logs` MODIFY `metadata` JSON NULL;',
   '-- AlterTable\r\nALTER TABLE `user_preferences` MODIFY `defaultReminders` JSON NULL;',
+  '-- AlterTable\r\nALTER TABLE `appointment_series` MODIFY `template` JSON NULL;',
 ].join('\r\n\r\n');
 const create = `CREATE TABLE \`appointment_events\` (\n  \`fields\` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(\`fields\`)),\n  \`id\` char(36) NOT NULL\n) ENGINE=InnoDB`;
 
@@ -20,6 +21,8 @@ test('MariaDB migration replay rejects type drift, unrelated changes and incompl
   assert.ok(!isMariaDbJsonDiff(replayDiff.replace('`fields`', '`unknown`')));
   assert.ok(!isMariaDbJsonDiff(replayDiff.split('\r\n\r\n').slice(1).join('\r\n\r\n')));
   assert.ok(!isMariaDbJsonDiff(`${replayDiff}\nALTER TABLE \`users\` ADD COLUMN \`extra\` TEXT;`));
+  // The EP02.1 three-column diff alone is now incomplete: the series template must match too.
+  assert.ok(!isMariaDbJsonDiff(replayDiff.split('\r\n\r\n').slice(0, 3).join('\r\n\r\n')));
 });
 
 test('MariaDB metadata check rejects a missing or widened constraint, collation, type or nullability drift', () => {

@@ -16,10 +16,14 @@ import {
   type CategoryId,
   type ReminderDto,
   type ReminderRuleDto,
+  type SeriesScope,
   MAX_ALL_DAY_SPAN_DAYS,
   addDaysToLocalDate,
   buildReminderPreview,
   calculateReminders,
+  describeRecurrenceThai,
+  effectiveMemberColor,
+  formatThaiDateTime,
   reminderLabelTh,
   estimateQuota,
   toFlexMessage,
@@ -42,7 +46,9 @@ import {
   type AppointmentRow,
   type ContentPolicy,
   type DestinationRow,
+  type PaymentStatus,
   type ReminderRuleRow,
+  type SeriesRow,
   type Store,
   StoreConflictError,
 } from '../store/types.js';
@@ -181,7 +187,42 @@ export function buildReminderRows(
   });
 }
 
-function rulesFromRows(rows: ReminderRuleRow[]): ReminderRuleDto[] {
+/** A paid bill occurrence never reminds: SCHEDULED rules become SUPPRESSED (fireAt kept). */
+export function applyPaymentSuppression(
+  rows: ReminderRuleRow[],
+  paymentStatus: PaymentStatus | null,
+): ReminderRuleRow[] {
+  if (paymentStatus !== 'PAID') return rows;
+  return rows.map((r) => (r.status === 'SCHEDULED' ? { ...r, status: 'SUPPRESSED' } : r));
+}
+
+/** Timing of an existing appointment row, for recalculating its reminders. */
+export function timingOfRow(a: AppointmentRow) {
+  return {
+    allDay: a.allDay,
+    startDate: a.startDate,
+    startTime: a.startAt ? toLocalTimeString(a.startAt, a.timeZone) : null,
+    timeZone: a.timeZone,
+  };
+}
+
+/** Extra row state carried through an update (series identity, payment state). */
+export type AppointmentCarry = Partial<
+  Pick<
+    AppointmentRow,
+    | 'createdAt'
+    | 'version'
+    | 'createdByUserId'
+    | 'seriesId'
+    | 'occurrenceDate'
+    | 'isException'
+    | 'paymentStatus'
+    | 'paidAt'
+    | 'paidByUserId'
+  >
+>;
+
+export function rulesFromRows(rows: ReminderRuleRow[]): ReminderRuleDto[] {
   return rows.map((r) =>
     r.kind === 'RELATIVE'
       ? { kind: 'RELATIVE', offsetMinutes: r.offsetMinutes ?? 0, enabled: r.enabled }
@@ -203,7 +244,8 @@ export class AppointmentService {
 
   // ───────────────────────── validation shared by create/update
 
-  private async validateAudience(
+  /** Destination / sharing validation shared by single and recurring writes. */
+  async validateAudience(
     actor: Actor,
     creatorId: string,
     input: AppointmentInput,
@@ -254,15 +296,17 @@ export class AppointmentService {
     return { destinations: out };
   }
 
-  private bundleFrom(
+  bundleFrom(
     id: string,
     actor: Actor,
     input: AppointmentInput,
     timing: Timing,
     destinations: { row: DestinationRow; policy: ContentPolicy }[],
-    base: Pick<AppointmentRow, 'createdAt' | 'version' | 'createdByUserId'> | null,
+    base: AppointmentCarry | null,
     now: Date,
   ): AppointmentBundle {
+    const bill = input.kind === 'BILL';
+    const paymentStatus: PaymentStatus | null = bill ? (base?.paymentStatus ?? 'UNPAID') : null;
     const appointment: AppointmentRow = {
       id,
       workspaceId: input.workspaceId,
@@ -284,6 +328,15 @@ export class AppointmentService {
       updatedAt: now,
       cancelledAt: null,
       cancelledByUserId: null,
+      kind: input.kind,
+      seriesId: base?.seriesId ?? null,
+      occurrenceDate: base?.occurrenceDate ?? null,
+      isException: base?.isException ?? false,
+      amount: bill ? (input.bill?.amount ?? null) : null,
+      currency: bill ? (input.bill?.currency ?? 'THB') : null,
+      paymentStatus,
+      paidAt: bill && paymentStatus === 'PAID' ? (base?.paidAt ?? null) : null,
+      paidByUserId: bill && paymentStatus === 'PAID' ? (base?.paidByUserId ?? null) : null,
     };
     return {
       appointment,
@@ -302,9 +355,34 @@ export class AppointmentService {
         contentPolicy: d.policy,
         createdAt: now,
       })),
-      reminderRules: buildReminderRows(id, timing, input.reminders, false, now),
+      reminderRules: applyPaymentSuppression(
+        buildReminderRows(id, timing, input.reminders, false, now),
+        paymentStatus,
+      ),
     };
   }
+
+  /** Set by the app wiring: recurring-series operations (domain/series.ts). */
+  series: {
+    create(
+      actor: Actor,
+      input: AppointmentInput,
+      key: string,
+    ): Promise<{ id: string; replayed: boolean }>;
+    updateScoped(
+      actor: Actor,
+      current: AppointmentBundle,
+      version: number,
+      input: AppointmentInput,
+      scope: Exclude<SeriesScope, 'THIS'>,
+    ): Promise<{ id: string }>;
+    cancelScoped(
+      actor: Actor,
+      current: AppointmentBundle,
+      version: number,
+      scope: Exclude<SeriesScope, 'THIS'>,
+    ): Promise<void>;
+  } | null = null;
 
   // ───────────────────────── commands
 
@@ -315,6 +393,10 @@ export class AppointmentService {
   ): Promise<{ id: string; replayed: boolean }> {
     if (!canInWorkspace(actor, 'appointment.create', input.workspaceId))
       throw badRequest('WORKSPACE_NOT_PERMITTED');
+    if (input.recurrence) {
+      if (!this.series) throw badRequest('RECURRENCE_UNAVAILABLE');
+      return this.series.create(actor, input, idempotencyKey);
+    }
     const now = this.clock();
     const timing = computeTiming(input, now);
     const existing = await this.store.getIdempotency(
@@ -354,7 +436,11 @@ export class AppointmentService {
           resourceType: 'appointment',
           resourceId: id,
           workspaceId: input.workspaceId,
-          meta: { visibility: input.visibility, count: bundle.reminderRules.length },
+          meta: {
+            visibility: input.visibility,
+            count: bundle.reminderRules.length,
+            kind: input.kind,
+          },
           at: now,
         });
         return { id, replayed: false };
@@ -373,7 +459,31 @@ export class AppointmentService {
     }
   }
 
-  async update(actor: Actor, id: string, version: number, input: AppointmentInput): Promise<void> {
+  /**
+   * Edits an appointment. Recurring occurrences take a scope: THIS (default — this occurrence
+   * only, it becomes an exception), FUTURE (this and later occurrences: the series is split)
+   * or ALL (the series template; occurrences from today on). Returns the id to show next.
+   */
+  async update(
+    actor: Actor,
+    id: string,
+    version: number,
+    input: AppointmentInput,
+    scope: SeriesScope = 'THIS',
+  ): Promise<{ id: string }> {
+    const peek = await this.store.getAppointment(id);
+    if (!peek || !canViewAppointment(actor, peek)) throw notFound();
+    if (peek.appointment.seriesId && scope !== 'THIS') {
+      if (!canEditAppointment(actor, peek)) throw new ApiError(403, 'FORBIDDEN', 'Not permitted');
+      if (peek.appointment.status === 'CANCELLED')
+        throw conflictError('APPOINTMENT_CANCELLED', 'Cancelled appointments cannot be edited');
+      if (input.workspaceId !== peek.appointment.workspaceId)
+        throw badRequest('WORKSPACE_IMMUTABLE');
+      if (input.kind !== peek.appointment.kind) throw badRequest('KIND_IMMUTABLE');
+      if (!this.series) throw badRequest('RECURRENCE_UNAVAILABLE');
+      return this.series.updateScoped(actor, peek, version, input, scope);
+    }
+    if (!peek.appointment.seriesId && input.recurrence) throw badRequest('RECURRENCE_CREATE_ONLY');
     const now = this.clock();
     await this.store.transaction(async (tx) => {
       const current = await tx.getAppointment(id);
@@ -384,6 +494,7 @@ export class AppointmentService {
         throw conflictError('APPOINTMENT_CANCELLED', 'Cancelled appointments cannot be edited');
       if (input.workspaceId !== current.appointment.workspaceId)
         throw badRequest('WORKSPACE_IMMUTABLE');
+      if (input.kind !== current.appointment.kind) throw badRequest('KIND_IMMUTABLE');
       if (current.appointment.version !== version) throw conflictError('VERSION_CONFLICT');
       const timing = computeTiming(input, now);
       const creatorId = current.appointment.createdByUserId;
@@ -407,7 +518,8 @@ export class AppointmentService {
         input,
         timing,
         destinations,
-        current.appointment,
+        // A recurring occurrence edited on its own becomes an exception: series edits skip it.
+        { ...current.appointment, isException: current.appointment.seriesId !== null },
         now,
       );
       if (!(await tx.updateAppointment(id, version, next))) throw conflictError('VERSION_CONFLICT');
@@ -432,9 +544,22 @@ export class AppointmentService {
         at: now,
       });
     });
+    return { id };
   }
 
-  async cancel(actor: Actor, id: string, version: number): Promise<void> {
+  async cancel(
+    actor: Actor,
+    id: string,
+    version: number,
+    scope: SeriesScope = 'THIS',
+  ): Promise<void> {
+    const peek = await this.store.getAppointment(id);
+    if (!peek || !canViewAppointment(actor, peek)) throw notFound();
+    if (peek.appointment.seriesId && scope !== 'THIS') {
+      if (!canEditAppointment(actor, peek)) throw new ApiError(403, 'FORBIDDEN', 'Not permitted');
+      if (!this.series) throw badRequest('RECURRENCE_UNAVAILABLE');
+      return this.series.cancelScoped(actor, peek, version, scope);
+    }
     const now = this.clock();
     await this.store.transaction(async (tx) => {
       const current = await tx.getAppointment(id);
@@ -478,6 +603,69 @@ export class AppointmentService {
     });
   }
 
+  /**
+   * Marks ONE bill occurrence paid or unpaid (user-reported, never bank-verified). Paid
+   * suppresses that occurrence's pending reminders; later occurrences are unaffected.
+   * Unpaid (a correction) recalculates them — reminders whose time has passed stay PAST and
+   * are never replayed.
+   */
+  async setPayment(
+    actor: Actor,
+    id: string,
+    version: number,
+    status: PaymentStatus,
+  ): Promise<void> {
+    const now = this.clock();
+    await this.store.transaction(async (tx) => {
+      const current = await tx.getAppointment(id);
+      if (!current || !canViewAppointment(actor, current)) throw notFound();
+      if (!canEditAppointment(actor, current))
+        throw new ApiError(403, 'FORBIDDEN', 'Not permitted');
+      const a = current.appointment;
+      if (a.kind !== 'BILL') throw badRequest('NOT_A_BILL');
+      if (a.status === 'CANCELLED')
+        throw conflictError('APPOINTMENT_CANCELLED', 'Cancelled appointments cannot be edited');
+      if (a.version !== version) throw conflictError('VERSION_CONFLICT');
+      const from = a.paymentStatus ?? 'UNPAID';
+      if (from === status) return;
+      const rules =
+        status === 'PAID'
+          ? applyPaymentSuppression(current.reminderRules, 'PAID').map((r) => ({
+              ...r,
+              calculatedAt: now,
+            }))
+          : buildReminderRows(id, timingOfRow(a), rulesFromRows(current.reminderRules), false, now);
+      const ok = await tx.updateAppointment(id, version, {
+        appointment: {
+          ...a,
+          paymentStatus: status,
+          paidAt: status === 'PAID' ? now : null,
+          paidByUserId: status === 'PAID' ? actor.user.id : null,
+          updatedAt: now,
+        },
+        reminderRules: rules,
+      });
+      if (!ok) throw conflictError('VERSION_CONFLICT');
+      await tx.appendAppointmentEvent({
+        id: newId(),
+        appointmentId: id,
+        actorUserId: actor.user.id,
+        type: 'PAYMENT_CHANGED',
+        fields: ['paymentStatus'],
+        createdAt: now,
+      });
+      await audit(tx, {
+        actorUserId: actor.user.id,
+        action: status === 'PAID' ? 'bill.marked_paid' : 'bill.marked_unpaid',
+        resourceType: 'appointment',
+        resourceId: id,
+        workspaceId: a.workspaceId,
+        meta: { fromStatus: from, toStatus: status },
+        at: now,
+      });
+    });
+  }
+
   // ───────────────────────── reads
 
   private async workspaceNames(
@@ -491,13 +679,37 @@ export class AppointmentService {
     );
   }
 
+  /** Series rows and creator identity colours needed to render a page of summaries. */
+  private async decorations(bundles: AppointmentBundle[]): Promise<Decorations> {
+    const seriesIds = [
+      ...new Set(bundles.map((b) => b.appointment.seriesId).filter((x): x is string => !!x)),
+    ];
+    const series = new Map<string, SeriesRow>();
+    for (const sid of seriesIds) {
+      const row = await this.store.getSeries(sid);
+      if (row) series.set(sid, row);
+    }
+    const creatorIds = [...new Set(bundles.map((b) => b.appointment.createdByUserId))];
+    const users = new Map(
+      (await this.store.getUsers(creatorIds)).map((u) => [u.id, u.displayName]),
+    );
+    const colors = new Map<string, string | null>();
+    for (const wsId of new Set(bundles.map((b) => b.appointment.workspaceId)))
+      for (const m of await this.store.listMembers(wsId))
+        colors.set(`${wsId}:${m.userId}`, m.colorToken);
+    return { series, users, colors };
+  }
+
   private summary(
     actor: Actor,
     b: AppointmentBundle,
     names: Map<string, { name: string; kind: AppointmentSummaryDto['workspaceKind'] }>,
+    deco: Decorations,
   ): AppointmentSummaryDto {
     const a = b.appointment;
     const ws = names.get(a.workspaceId);
+    const series = a.seriesId ? deco.series.get(a.seriesId) : undefined;
+    const shared = (ws?.kind ?? 'PERSONAL') !== 'PERSONAL';
     return {
       id: a.id,
       workspaceId: a.workspaceId,
@@ -516,6 +728,36 @@ export class AppointmentService {
       status: a.status,
       mine: a.createdByUserId === actor.user.id,
       scheduledReminders: b.reminderRules.filter((r) => r.status === 'SCHEDULED').length,
+      kind: a.kind,
+      bill:
+        a.kind === 'BILL'
+          ? {
+              amount: a.amount,
+              currency: 'THB',
+              paymentStatus: a.paymentStatus ?? 'UNPAID',
+              paidAt: a.paidAt?.toISOString() ?? null,
+            }
+          : null,
+      series:
+        a.seriesId && series && a.occurrenceDate
+          ? {
+              id: a.seriesId,
+              frequency: series.frequency,
+              occurrenceDate: a.occurrenceDate,
+              isException: a.isException,
+            }
+          : null,
+      // Only in shared workspaces, and only for appointments the viewer may already see.
+      creator: shared
+        ? {
+            displayName: deco.users.get(a.createdByUserId) ?? '',
+            color: effectiveMemberColor(
+              deco.colors.get(`${a.workspaceId}:${a.createdByUserId}`),
+              a.workspaceId,
+              a.createdByUserId,
+            ),
+          }
+        : null,
     };
   }
 
@@ -554,9 +796,9 @@ export class AppointmentService {
     const bundles = await this.store.getAppointmentBundles(page.map((r) => r.id));
     const names = await this.workspaceNames(actor);
     // Defence in depth: re-check every row with the policy (the store predicate is the primary filter).
-    const items = bundles
-      .filter((b) => canViewAppointment(actor, b))
-      .map((b) => this.summary(actor, b, names));
+    const visible = bundles.filter((b) => canViewAppointment(actor, b));
+    const deco = await this.decorations(visible);
+    const items = visible.map((b) => this.summary(actor, b, names, deco));
     return { items, hasMore: rows.length > q.limit };
   }
 
@@ -590,8 +832,23 @@ export class AppointmentService {
       labelTh: labelFor(r),
     }));
     const a = b.appointment;
+    const deco = await this.decorations([b]);
+    const series = a.seriesId ? deco.series.get(a.seriesId) : undefined;
+    const paidBy = a.paidByUserId
+      ? ((await this.store.getUser(a.paidByUserId))?.displayName ?? null)
+      : null;
     return {
-      ...this.summary(actor, b, names),
+      ...this.summary(actor, b, names, deco),
+      recurrence: series
+        ? {
+            rule: seriesRule(series),
+            startDate: series.startDate,
+            status: series.status,
+            descriptionTh: describeRecurrenceThai(seriesRule(series), series.startDate),
+            generatedThrough: series.generatedThrough,
+          }
+        : null,
+      paidBy,
       notes: a.notes,
       version: a.version,
       createdBy: { id: a.createdByUserId, displayName: users.get(a.createdByUserId) ?? '' },
@@ -774,7 +1031,8 @@ export class AppointmentService {
       message,
       issues: validateFlexMessage(message),
       fireAt: rule.fireAt.toISOString(),
-      fireAtLocal: `${toLocalDateString(rule.fireAt, timing.timeZone)} ${toLocalTimeString(rule.fireAt, timing.timeZone)}`,
+      // RD08: Thai display text; `fireAt` stays the canonical ISO instant.
+      fireAtLocal: formatThaiDateTime(rule.fireAt, timing.timeZone),
     };
   }
 
@@ -828,8 +1086,32 @@ export class AppointmentService {
       notes: a.createdByUserId === actor.user.id ? a.notes : null,
       visibility: 'PRIVATE' as const,
       reminders: rulesFromRows(b.reminderRules),
+      kind: a.kind,
+      bill: a.kind === 'BILL' ? { amount: a.amount, currency: 'THB' as const } : null,
     };
   }
+}
+
+interface Decorations {
+  series: Map<string, SeriesRow>;
+  users: Map<string, string>;
+  colors: Map<string, string | null>;
+}
+
+/** Series row → shared recurrence rule. */
+export function seriesRule(r: SeriesRow) {
+  return {
+    frequency: r.frequency,
+    interval: r.interval,
+    monthDay: r.monthDay === -1 ? ('LAST' as const) : r.monthDay,
+    missingDay: r.missingDayPolicy,
+    end:
+      r.endType === 'UNTIL' && r.untilDate
+        ? { type: 'UNTIL' as const, until: r.untilDate }
+        : r.endType === 'COUNT' && r.occurrenceCount
+          ? { type: 'COUNT' as const, count: r.occurrenceCount }
+          : { type: 'NEVER' as const },
+  };
 }
 
 function labelFor(r: ReminderRuleRow): string {
@@ -851,6 +1133,7 @@ function diffFields(prev: AppointmentBundle, next: AppointmentBundle): string[] 
     'category',
     'location',
     'notes',
+    'amount',
     'visibility',
     'allDay',
     'startDate',
@@ -891,6 +1174,7 @@ function eventTypes(fields: string[]): AppointmentEventType[] {
   if (fields.includes('visibility') || fields.includes('sharedWith')) t.add('VISIBILITY_CHANGED');
   if (fields.includes('destinations')) t.add('DESTINATIONS_CHANGED');
   if (fields.includes('reminders')) t.add('REMINDERS_CHANGED');
-  if (fields.some((f) => ['title', 'category', 'location', 'notes'].includes(f))) t.add('UPDATED');
+  if (fields.some((f) => ['title', 'category', 'location', 'notes', 'amount'].includes(f)))
+    t.add('UPDATED');
   return [...t];
 }

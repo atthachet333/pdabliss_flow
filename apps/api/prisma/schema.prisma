@@ -69,6 +69,7 @@ model User {
   idempotencyRecords  IdempotencyRecord[]
   auditEntries        AuditLog[]
   appointmentEvents   AppointmentEvent[]
+  createdSeries       AppointmentSeries[]   @relation("SeriesCreator")
 
   @@index([status])
   @@map("users")
@@ -226,6 +227,7 @@ model Workspace {
   appointments     Appointment[]
   destinations     LineDestination[]
   accessRequests   AccessRequest[]
+  series           AppointmentSeries[]
 
   @@index([status])
   @@map("workspaces")
@@ -238,6 +240,9 @@ model WorkspaceMember {
   role          WorkspaceRole
   status        MemberStatus  @default(ACTIVE)
   addedByUserId String?       @db.Char(36)
+  /// Member identity colour token for THIS workspace (packages/shared MEMBER_COLORS id).
+  /// Chosen by the member; null = deterministic default. Never free-form CSS.
+  colorToken    String?       @db.VarChar(16)
   createdAt     DateTime      @db.DateTime(3)
   updatedAt     DateTime      @db.DateTime(3)
   workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -314,6 +319,77 @@ enum AppointmentStatus {
   CANCELLED
 }
 
+enum AppointmentKind {
+  EVENT
+  BILL // user-reported payment due date (never bank-verified, no payment processing)
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum MissingDayPolicy {
+  LAST_DAY // 31st in a 30-day month → the 30th
+  SKIP // no occurrence that period
+}
+
+enum RecurrenceEnd {
+  NEVER // bounded by the rolling materialization horizon
+  UNTIL
+  COUNT
+}
+
+enum SeriesStatus {
+  ACTIVE
+  ENDED // no further occurrences (end reached or split)
+  CANCELLED
+}
+
+/// A recurring appointment or bill. Occurrences are ordinary appointment rows (so every read
+/// model, visibility rule and reminder row applies unchanged) materialized up to a bounded
+/// rolling horizon; (seriesId, occurrenceDate) is unique, so generation is idempotent.
+model AppointmentSeries {
+  id               String              @id @db.Char(36)
+  workspaceId      String              @db.Char(36)
+  createdByUserId  String              @db.Char(36)
+  kind             AppointmentKind     @default(EVENT)
+  frequency        RecurrenceFrequency
+  interval         Int                 @default(1)
+  /// MONTHLY only: 1–31, or -1 for the last day of the month; null = start date's day.
+  monthDay         Int?
+  missingDayPolicy MissingDayPolicy    @default(LAST_DAY)
+  endType          RecurrenceEnd       @default(NEVER)
+  untilDate        DateTime?           @db.Date
+  occurrenceCount  Int?
+  /// First possible local occurrence date.
+  startDate        DateTime            @db.Date
+  /// Occurrence template (validated appointment input without the date). It is appointment
+  /// content: readable only through an occurrence the viewer may see, never by admins.
+  template         Json?
+  /// Last local date occurrences have been materialized through.
+  generatedThrough DateTime?           @db.Date
+  status           SeriesStatus        @default(ACTIVE)
+  version          Int                 @default(1)
+  createdAt        DateTime            @db.DateTime(3)
+  updatedAt        DateTime            @db.DateTime(3)
+  workspace        Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  createdBy        User                @relation("SeriesCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  occurrences      Appointment[]
+
+  @@index([status, generatedThrough])
+  @@index([workspaceId])
+  @@index([createdByUserId])
+  @@map("appointment_series")
+}
+
 model Appointment {
   id               String                @id @db.Char(36)
   workspaceId      String                @db.Char(36)
@@ -338,8 +414,23 @@ model Appointment {
   updatedAt        DateTime              @db.DateTime(3)
   cancelledAt      DateTime?             @db.DateTime(3)
   cancelledByUserId String?              @db.Char(36)
+  kind             AppointmentKind       @default(EVENT)
+  /// Recurring occurrences only.
+  seriesId         String?               @db.Char(36)
+  /// Generated local date: the stable occurrence identity (unchanged when moved).
+  occurrenceDate   DateTime?             @db.Date
+  /// Edited individually ("this occurrence only"); series edits leave it untouched.
+  isException      Boolean               @default(false)
+  /// BILL only: exact decimal amount (null = not specified) in `currency`.
+  amount           Decimal?              @db.Decimal(14, 2)
+  currency         String?               @db.Char(3)
+  /// BILL only: user-reported payment state of THIS occurrence.
+  paymentStatus    PaymentStatus?
+  paidAt           DateTime?             @db.DateTime(3)
+  paidByUserId     String?               @db.Char(36)
   workspace        Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
   createdBy        User                  @relation("AppointmentCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  series           AppointmentSeries?    @relation(fields: [seriesId], references: [id], onDelete: Restrict)
   accessGrants     AppointmentAccess[]
   destinations     AppointmentDestination[]
   reminderRules    ReminderRule[]
@@ -349,6 +440,7 @@ model Appointment {
   @@index([workspaceId, endDate])
   @@index([createdByUserId, startDate])
   @@index([status])
+  @@unique([seriesId, occurrenceDate])
   @@map("appointments")
 }
 
@@ -395,6 +487,7 @@ enum ReminderStatus {
   DISABLED // turned off by the user
   DUPLICATE // same instant as an earlier rule — delivered once via the earlier rule
   CANCELLED // appointment cancelled
+  SUPPRESSED // bill occurrence marked paid (user-reported) — never delivered
 }
 
 model ReminderRule {
@@ -426,6 +519,7 @@ enum AppointmentEventType {
   REMINDERS_CHANGED
   VISIBILITY_CHANGED
   DESTINATIONS_CHANGED
+  PAYMENT_CHANGED
 }
 
 model AppointmentEvent {

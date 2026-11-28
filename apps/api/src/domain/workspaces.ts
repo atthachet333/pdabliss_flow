@@ -1,4 +1,5 @@
 /** Workspaces and memberships (My Groups). Authorization via policy.ts only. */
+import { isMemberColorId } from '@flow/shared';
 import {
   type Clock,
   badRequest,
@@ -209,5 +210,23 @@ export class WorkspaceService {
         at: now,
       });
     });
+  }
+
+  /**
+   * A member sets (or resets with null) their OWN identity colour in one workspace. Only
+   * palette token ids are accepted — no free-form colour or CSS ever reaches storage.
+   * There is deliberately no API to change another member's colour.
+   */
+  async setMyColor(actor: Actor, workspaceId: string, color: string | null): Promise<void> {
+    if (!canInWorkspace(actor, 'workspace.view', workspaceId)) throw notFound();
+    if (color !== null && !isMemberColorId(color)) throw badRequest('INVALID_COLOR');
+    const now = this.clock();
+    const updated = await this.store.updateMember(
+      workspaceId,
+      actor.user.id,
+      { colorToken: color },
+      now,
+    );
+    if (!updated || updated.status !== 'ACTIVE') throw notFound();
   }
 }

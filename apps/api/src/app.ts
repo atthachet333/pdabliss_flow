@@ -20,12 +20,14 @@ import { AppointmentService } from './domain/appointments.js';
 import { DestinationService } from './domain/destinations.js';
 import { IdentityService } from './domain/identity.js';
 import { InvitationService } from './domain/invitations.js';
+import { OperationsService } from './domain/operations.js';
+import { SeriesService } from './domain/series.js';
 import { WorkspaceService } from './domain/workspaces.js';
 import type { AppEnv } from './env.js';
 import { registerV1Routes } from './http/v1.js';
-import { sendApiError } from './http/context.js';
+import { loadActor, sendApiError } from './http/context.js';
 import type { Store } from './store/types.js';
-import { isAuthConfigured } from './env.js';
+import { isAuthConfigured, isWebhookConfigured } from './env.js';
 import { cookieSettings } from './http/security.js';
 import {
   createLineIdTokenVerifier,
@@ -41,6 +43,13 @@ import {
 
 export const SERVICE_NAME = 'pdabliss-flow-api';
 export const SERVICE_VERSION = '0.2.0-ep02';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** Rolling-horizon extension of recurring series (run by the server's housekeeping). */
+    flowExtendSeries: (() => Promise<{ extended: number; created: number; paused: number }>) | null;
+  }
+}
 
 /** Log paths redacted everywhere (headers and common secret-bearing fields). */
 export const REDACT_PATHS = [
@@ -263,7 +272,14 @@ export function buildApp({
       onGroupEvent: async (kind, groupId) => destinations?.onGroupEvent(kind, groupId),
     },
   });
+  app.decorate('flowExtendSeries', null);
   if (store && sessions && identity && destinations) {
+    const appointments = new AppointmentService(store, clock, integration?.publicBaseUrl ?? null);
+    const series = new SeriesService(store, clock, appointments, (userId) =>
+      loadActor(store, userId),
+    );
+    appointments.series = series;
+    app.flowExtendSeries = () => series.extendAll();
     registerV1Routes(app, {
       store,
       sessions,
@@ -274,7 +290,19 @@ export function buildApp({
       workspaces: new WorkspaceService(store, clock),
       invitations: new InvitationService(store, clock),
       destinations,
-      appointments: new AppointmentService(store, clock, integration?.publicBaseUrl ?? null),
+      appointments,
+      operations: new OperationsService(
+        store,
+        clock,
+        destinations,
+        messaging,
+        {
+          login: isAuthConfigured(integration),
+          messagingRead: !!integration?.line.channelAccessToken,
+          webhook: !!integration && isWebhookConfigured(integration),
+        },
+        SERVICE_VERSION,
+      ),
       messaging,
       publicBaseUrl: integration?.publicBaseUrl ?? null,
       clock,

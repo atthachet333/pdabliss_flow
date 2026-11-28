@@ -39,7 +39,11 @@ export function TodayPage() {
                 <SallyImage expression={next ? 'reminder' : 'default'} size={72} decorative />
                 <div>
                   <p className="hero__date">{dt.long}</p>
-                  <p className="hero__greet f-name">สวัสดีค่ะ คุณ{first}</p>
+                  {/* RD04: a real space between the Thai honorific and the LINE name, which wraps on its own. */}
+                  <p className="hero__greet f-name">
+                    <span>สวัสดีค่ะ</span>
+                    <span className="hero__name">คุณ {first}</span>
+                  </p>
                   <p className="hero__line">
                     {next ? (
                       <>
@@ -65,13 +69,13 @@ export function TodayPage() {
                 </div>
                 <div className="stat">
                   <span className="stat__n f-num">{d.reminders.scheduledNext7Days}</span>
-                  <span className="stat__l">แจ้งเตือนใน 7 วัน</span>
+                  <span className="stat__l">เวลาแจ้งเตือนที่คำนวณไว้ใน 7 วัน</span>
                 </div>
               </div>
               {!d.reminders.deliveryEnabled ? (
                 <Notice tone="info">
-                  <BellRing aria-hidden className="inline-icon" /> ระบบคำนวณเวลาแจ้งเตือนไว้ให้แล้ว —
-                  การส่งข้อความ LINE จริงจะเปิดในเฟสถัดไป
+                  <BellRing aria-hidden className="inline-icon" /> FLOW คำนวณเวลาแจ้งเตือนไว้ให้แล้ว
+                  แต่ยังไม่มีการส่งข้อความ LINE จริง — ระบบส่งจะเปิดในเฟสถัดไป
                 </Notice>
               ) : null}
               <h2 className="section-title">วันนี้</h2>

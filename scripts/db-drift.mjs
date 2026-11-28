@@ -2,6 +2,8 @@ export const EP02_JSON_COLUMNS = [
   ['appointment_events', 'fields'],
   ['audit_logs', 'metadata'],
   ['user_preferences', 'defaultReminders'],
+  // EP02 consolidated (20261128090000_ep02_series_bills_colors): same nullable JSON contract.
+  ['appointment_series', 'template'],
 ];
 
 /** Prisma 7.10.1 loses the JSON alias during migration replay. Match the entire diff. */

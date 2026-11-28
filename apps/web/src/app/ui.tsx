@@ -13,6 +13,7 @@ import {
 } from '../components/icons';
 import { Button, CategoryBadge, Notice, Skeleton, StateView } from '../components/ui';
 import { dateLabel, errorText, whenText, type Load } from './core';
+import { BillBadge, MemberMark, SeriesBadge } from './extras';
 
 export function Page({
   title,
@@ -119,6 +120,13 @@ export function AppointmentCard({
         <span className="appt__title f-name">{a.title}</span>
         <span className="appt__meta">
           <CategoryBadge category={a.category} />
+          <SeriesBadge a={a} />
+          <BillBadge a={a} />
+          {a.creator && !a.mine ? (
+            <span className="appt__creator">
+              <MemberMark name={a.creator.displayName} color={a.creator.color} />
+            </span>
+          ) : null}
           <span className="appt__ws">
             {a.visibility === 'PRIVATE' ? <Lock aria-label="ส่วนตัว" /> : <Users aria-hidden />}
             {a.workspaceName}
@@ -130,7 +138,7 @@ export function AppointmentCard({
             </span>
           ) : null}
           {a.scheduledReminders > 0 ? (
-            <span className="appt__rem" title="จำนวนการแจ้งเตือนที่ตั้งไว้">
+            <span className="appt__rem" title="จำนวนเวลาแจ้งเตือนที่คำนวณไว้ (ยังไม่ส่งจริง)">
               <Bell aria-hidden />
               {a.scheduledReminders}
             </span>

@@ -188,6 +188,14 @@ export function formatThaiTime(instant: Date, timeZone: string): string {
   return `${toLocalTimeString(instant, timeZone)} น.`;
 }
 
+/**
+ * "พฤ. 26 พ.ย. 2569 · 09:00 น." — the one display format for an instant (RD08). Canonical
+ * API values stay ISO-8601 UTC; only presentation uses this.
+ */
+export function formatThaiDateTime(instant: Date, timeZone: string): string {
+  return `${formatThaiDate(instant, timeZone).short} · ${formatThaiTime(instant, timeZone)}`;
+}
+
 /** Human Thai description of a reminder offset, e.g. 30 → "ก่อน 30 นาที". */
 export function describeOffsetThai(minutesBefore: number): string {
   if (minutesBefore === 0) return 'ตรงเวลานัด';

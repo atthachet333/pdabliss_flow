@@ -242,8 +242,21 @@ export function defineScenarios(label: string, makeStore: StoreFactory): void {
         role: 'OWNER',
       });
       assert.equal(bad.statusCode, 400, 'invitations cannot carry a global role');
-      // Suspended users cannot use invitations to bypass suspension.
-      await owner.post(`/api/v1/admin/users/${w.coMember.id}/status`, { action: 'suspend' });
+      // Suspended users cannot use invitations to bypass suspension. The clock moved hours
+      // forward above, so the owner confirms with LINE again (sensitive actions need a recent
+      // login since EP02 consolidated) and the suspension itself is asserted.
+      assert.equal(
+        (
+          await owner.post(`/api/v1/admin/users/${w.coMember.id}/status`, { action: 'suspend' })
+        ).json().error.code,
+        'REAUTH_REQUIRED',
+      );
+      await owner.login(w.owner.token);
+      assert.equal(
+        (await owner.post(`/api/v1/admin/users/${w.coMember.id}/status`, { action: 'suspend' }))
+          .statusCode,
+        200,
+      );
       const sus = await w.as(w.coMember);
       const t3 = await mk();
       assert.equal((await sus.post('/api/v1/invitations/redeem', { token: t3 })).statusCode, 403);

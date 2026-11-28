@@ -619,3 +619,46 @@ describe('FlowApiClient: HTTP 429', () => {
     );
   });
 });
+
+describe('EP02 consolidated — re-authentication for sensitive administration', () => {
+  it('re-verifies a fresh LIFF ID token with the server (new session), no password', async () => {
+    const l = fakeLiff({ inClient: true });
+    const a = fakeApi({ session: APPROVED });
+    const { c } = controller(l.liff, a.api);
+    await c.start();
+    assert.equal(await c.reauthenticate('/admin/users'), 'ok');
+    assert.ok(a.calls.includes(`exchange:${TOKEN}`));
+    assert.equal(c.getView().kind, 'approved');
+  });
+
+  it('inside LINE with an expired token it cannot force a login: the user reopens FLOW', async () => {
+    const l = fakeLiff({ inClient: true, exp: Math.floor(NOW / 1000) - 10 });
+    const a = fakeApi({ session: APPROVED });
+    const { c } = controller(l.liff, a.api);
+    await c.start();
+    assert.equal(await c.reauthenticate('/admin/users'), 'unavailable');
+    assert.ok(!l.calls.some((x) => x.startsWith('login:')));
+  });
+
+  it('an external browser returns to the same /admin path only (no query, no other origin)', async () => {
+    const l = fakeLiff({ inClient: false, exp: Math.floor(NOW / 1000) - 10 });
+    const a = fakeApi({ session: APPROVED });
+    const { c } = controller(l.liff, a.api);
+    await c.start();
+    assert.equal(await c.reauthenticate('/admin/users/x?token=abc#frag'), 'redirecting');
+    assert.ok(l.calls.includes('login:https://flow-test.example/admin/users/x'));
+    const l2 = fakeLiff({ inClient: false, exp: Math.floor(NOW / 1000) - 10 });
+    const { c: c2 } = controller(l2.liff, fakeApi({ session: APPROVED }).api);
+    await c2.start();
+    await c2.reauthenticate('//evil.example/admin');
+    assert.ok(l2.calls.includes('login:https://flow-test.example/'));
+  });
+
+  it('a server refusal of the fresh token is reported, never treated as success', async () => {
+    const l = fakeLiff({ inClient: true });
+    const a = fakeApi({ session: APPROVED, exchange: { state: 'token-invalid' } });
+    const { c } = controller(l.liff, a.api);
+    await c.start();
+    assert.equal(await c.reauthenticate('/admin'), 'unavailable');
+  });
+});

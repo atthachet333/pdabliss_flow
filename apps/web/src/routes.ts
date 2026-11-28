@@ -12,6 +12,7 @@ export const APP_ROUTES = new Set([
   '/privacy',
   '/terms',
   '/owner',
+  '/admin',
 ]);
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 export const APP_ROUTE_PATTERNS: readonly RegExp[] = [
@@ -19,6 +20,9 @@ export const APP_ROUTE_PATTERNS: readonly RegExp[] = [
   new RegExp(`^/groups/${UUID}$`),
   /^\/owner\/(requests|users|invitations|groups|audit)$/,
   new RegExp(`^/owner/users/${UUID}$`),
+  // EP02 consolidated: desktop Platform Administration Center (same origin, no new port).
+  /^\/admin\/(requests|users|workspaces|permissions|invitations|groups|activity|notifications|quota|friends|health|audit|settings)$/,
+  new RegExp(`^/admin/(users|workspaces)/${UUID}$`),
   /^\/settings\/(preferences|privacy)$/,
   /^\/invite\/[A-Za-z0-9_-]{43}$/,
 ];

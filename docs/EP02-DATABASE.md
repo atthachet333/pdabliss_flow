@@ -136,3 +136,24 @@ Ended sessions and expired rate-limit buckets are purged by the store (`purgeSes
 bodies, ID tokens, cookies and invitation tokens are never stored. Appointments and their
 history are kept (cancelled, not deleted); account deletion/export procedures are an EP05 item
 for the owner's privacy policy.
+
+## EP02 consolidated migration (`20261128090000_ep02_series_bills_colors`)
+
+The migration is additive and applied to development and test databases on 2026-11-28. Dev row
+counts were identical before and after (`.qa/ep02-consolidated/dev-counts-*.json`), and the
+initial migration is byte-identical.
+
+- New table `appointment_series`: rule, nullable `template JSON`, `generatedThrough`, status and
+  version. It has foreign keys to `workspaces` and `users` (RESTRICT).
+- `appointments` gains `kind` (EVENT/BILL), `seriesId` (FK RESTRICT), `occurrenceDate DATE`,
+  `isException`, `amount DECIMAL(14,2)`, `currency CHAR(3)`, `paymentStatus`, `paidAt` and
+  `paidByUserId`. **UNIQUE(`seriesId`, `occurrenceDate`)** prevents duplicate occurrences.
+- `reminder_rules.status` gains `SUPPRESSED` (a paid bill occurrence).
+  `appointment_events.type` gains `PAYMENT_CHANGED`.
+- `workspace_members` gains `colorToken VARCHAR(16)`, a validated palette id per user and
+  workspace.
+- The semantic drift guard now lists four JSON columns, adding `appointment_series.template`,
+  with the same exact whole-diff match and `JSON_VALID` / `utf8mb4_bin` / nullability
+  verification. `node scripts/db.mjs sql` renders committed migrations against the schema
+  through the shadow database only, to author reviewed migrations. It writes nothing.
+- The test-database reset list includes `appointment_series`.

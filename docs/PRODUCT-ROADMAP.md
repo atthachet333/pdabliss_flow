@@ -9,17 +9,17 @@ Requirements baseline: [MASTER-SPECIFICATION.md](MASTER-SPECIFICATION.md). This 
 - Monday 30 Nov: controlled private pilot with owner-approved family and employees, only if release gates pass. If not, continue staging or postpone the affected pilot; never waive security/privacy/delivery gates to meet the date.
 - Asia/Bangkok; no additional paid subscriptions or automatic plan upgrades; existing LINE resources and isolated MariaDB/Prisma infrastructure. No changes to unrelated systems, including HR LINE bot.
 
-| Episode | Scope | Status |
-| --- | --- | --- |
-| EP00 Signature identity & foundation | Monorepo, Sally, design system, shells, local gates | Delivered: [EP00-REPORT.md](EP00-REPORT.md) |
-| EP01 LINE integration & authentication | LIFF, server-side identity verification, signed webhooks, private access | Delivered: [EP01-REPORT.md](EP01-REPORT.md) |
-| EP02 Complete Application, Database & Privacy | Original EP02 + EP03 merged; MariaDB/Prisma, calendar CRUD, permissions, owner approval, invites, audit, multiple reminder rules | LOCAL PASS / REAL LINE ACCEPTANCE PARTIAL; checkpoint c9aebb4 |
-| EP02.1 Acceptance remediation | Schema drift, database outage, invitation concurrency, dependencies, verification | Local pass: 300/300 tests, 31 passing gates, one intentional install skip, 36/36 real MariaDB tests, zero npm audit findings, 175 browser states |
-| EP02.2 Real-device remediation & recurring application | RD01–RD06/RD08, WebKit, per-workspace member colors, recurring appointments and monthly bills, paid status | Next — Saturday |
-| EP02.3 Platform Administration Center | Desktop-first web admin using existing owner APIs, retain mobile console, verified LINE requests, roles, workspace access, audit, Activity Center and User Access Control | Planned — Saturday |
-| EP03 Smart Notification & Sally Experience | Merges former EP04/EP05: persistent worker, quota, retry/idempotency, group linking, onboarding, Flex, rich menu, acknowledgement, emergency controls | Planned — Sunday |
-| EP04 Senior QA, Security & Reliability | Former EP06: independent audit, real device, multi-user, scheduling, quota, recovery, backup/restore | Planned — Sunday |
-| EP05 Production Deployment & Pilot | Former EP07: isolated production, PM2, Cloudflare, LINE config, smoke, rollback, pilot | Planned — Sunday; separate deployment authorization required |
+| Episode                                                | Scope                                                                                                                                                                     | Status                                                                                                                                           |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| EP00 Signature identity & foundation                   | Monorepo, Sally, design system, shells, local gates                                                                                                                       | Delivered: [EP00-REPORT.md](EP00-REPORT.md)                                                                                                      |
+| EP01 LINE integration & authentication                 | LIFF, server-side identity verification, signed webhooks, private access                                                                                                  | Delivered: [EP01-REPORT.md](EP01-REPORT.md)                                                                                                      |
+| EP02 Complete Application, Database & Privacy          | Original EP02 + EP03 merged; MariaDB/Prisma, calendar CRUD, permissions, owner approval, invites, audit, multiple reminder rules                                          | LOCAL PASS / REAL LINE ACCEPTANCE PARTIAL; checkpoint c9aebb4                                                                                    |
+| EP02.1 Acceptance remediation                          | Schema drift, database outage, invitation concurrency, dependencies, verification                                                                                         | Local pass: 300/300 tests, 31 passing gates, one intentional install skip, 36/36 real MariaDB tests, zero npm audit findings, 175 browser states |
+| EP02.2 Real-device remediation & recurring application | RD01–RD06/RD08, WebKit, per-workspace member colors, recurring appointments and monthly bills, paid status                                                                | Consolidated into EP02 (28 Nov): implemented and locally verified, see [EP02-CONSOLIDATED-REPORT.md](EP02-CONSOLIDATED-REPORT.md)                |
+| EP02.3 Platform Administration Center                  | Desktop-first web admin using existing owner APIs, retain mobile console, verified LINE requests, roles, workspace access, audit, Activity Center and User Access Control | Consolidated into EP02 (28 Nov): implemented and locally verified, see [EP02-ADMINISTRATION-GUIDE.md](EP02-ADMINISTRATION-GUIDE.md)              |
+| EP03 Smart Notification & Sally Experience             | Merges former EP04/EP05: persistent worker, quota, retry/idempotency, group linking, onboarding, Flex, rich menu, acknowledgement, emergency controls                     | Planned — Sunday                                                                                                                                 |
+| EP04 Senior QA, Security & Reliability                 | Former EP06: independent audit, real device, multi-user, scheduling, quota, recovery, backup/restore                                                                      | Planned — Sunday                                                                                                                                 |
+| EP05 Production Deployment & Pilot                     | Former EP07: isolated production, PM2, Cloudflare, LINE config, smoke, rollback, pilot                                                                                    | Planned — Sunday; separate deployment authorization required                                                                                     |
 
 ## Saturday — EP02.2
 
@@ -71,6 +71,15 @@ EP04: independent review of auth/session/CSRF/IDOR, cross-workspace leakage, adm
 EP05: only after EP04 pass and separate owner deployment authorization. Verify shared Windows server ports and gateway routing; dedicated production pdabliss_flow DB and least-privilege credentials; safe migration/build, restart only FLOW PM2 processes, named Cloudflare tunnel, HTTPS flow.pdabliss.com, permanent LIFF endpoint, signed webhook, rich menu activation, backups/monitoring, rollback and smoke. Enable outbound only after destination/owner/quota controls are verified. Do not affect other services. Production smoke includes real controlled notification and restart recovery; pm2 save only after success.
 
 Monday pilot: limited approved family/staff; begin with synthetic or low-risk appointments and bills, confirm actual sends and privacy; monitor worker, quota and errors, collect feedback. Expand only after observed reliability; do not rely solely on pilot reminders for critical deadlines.
+
+## EP02 consolidated (28 November 2026)
+
+The owner authorized EP02.2 and EP02.3 as internal phases of one consolidated EP02 execution on
+the condominium workstation, where all remaining development now happens. The scope still ends
+at EP05. Result and evidence: [EP02-CONSOLIDATED-REPORT.md](EP02-CONSOLIDATED-REPORT.md),
+[requirements traceability](EP02-REQUIREMENTS-TRACEABILITY.md),
+[final acceptance](EP02-FINAL-ACCEPTANCE.md), [EP03 handover](EP03-HANDOVER.md).
+Historical reports keep their original results.
 
 ## Carried forward and evidence
 

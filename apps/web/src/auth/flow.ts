@@ -270,6 +270,38 @@ export class AuthController {
     liff.login(this.redirectUri());
   }
 
+  /**
+   * Fresh LINE verification for sensitive administration (server answered REAUTH_REQUIRED).
+   * A valid LIFF ID token is exchanged again (the server verifies it with LINE and rotates
+   * the session); otherwise an external browser goes through a guarded LINE login that
+   * returns to `returnPath` (same origin, path only). The LINE app itself cannot be forced to
+   * re-login: the user reopens FLOW from LINE. There is no password fallback.
+   */
+  async reauthenticate(returnPath: string): Promise<'ok' | 'redirecting' | 'unavailable'> {
+    const liff = this.liff;
+    if (!liff) return 'unavailable';
+    const token = liff.isLoggedIn() ? liff.getIDToken() : null;
+    const exp = liff.getIdTokenExp();
+    const fresh = !!token && (exp === null || exp * 1000 > this.now() + 30_000);
+    if (!fresh) {
+      if (liff.isInClient() || !this.deps.guard.allow()) return 'unavailable';
+      if (liff.isLoggedIn()) liff.logout();
+      const path = returnPath.startsWith('/') && !returnPath.startsWith('//') ? returnPath : '/';
+      liff.login(`${this.deps.location.origin}${path.split(/[?#]/)[0]}`);
+      return 'redirecting';
+    }
+    try {
+      const result = await this.deps.api.exchange(token as string);
+      if ('user' in result && result.state === 'approved') {
+        this.set({ kind: 'approved', user: result.user, expiresAt: result.expiresAt });
+        return 'ok';
+      }
+    } catch {
+      /* falls through */
+    }
+    return 'unavailable';
+  }
+
   /** "Log in with LINE" button (external browsers). */
   login(): Promise<void> {
     return this.single(async () => {

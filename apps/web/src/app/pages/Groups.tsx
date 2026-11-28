@@ -13,6 +13,8 @@ import {
 import { Button, Notice } from '../../components/ui';
 import type { Role, WorkspaceDetailDto } from '../api';
 import { errorText, KIND_TEXT, ROLE_TEXT, useAction, useApp, useLoad } from '../core';
+import type { MemberColorId } from '@flow/shared';
+import { ColorPicker, MemberMark } from '../extras';
 import { Confirm, Empty, Field, Loaded, Page, Segmented } from '../ui';
 
 type Kind = 'FAMILY' | 'COMPANY' | 'CUSTOM';
@@ -154,6 +156,9 @@ function GroupBody({
   const [name, setName] = useState(w.workspace.name);
   const [role, setRole] = useState<Role>('MEMBER');
   const [pick, setPick] = useState('');
+  const myMember = w.members.find((m) => m.me);
+  const [color, setColor] = useState<MemberColorId | null>(myMember?.color ?? null);
+  const [colorRun, colorBusy, colorError] = useAction();
   const candidates = useLoad(
     () => (w.can.manageMembers ? api.candidates(w.workspace.id) : Promise.resolve({ items: [] })),
     `cand|${w.workspace.id}|${dialog?.kind === 'add'}`,
@@ -182,9 +187,8 @@ function GroupBody({
       <ul className="member-list">
         {w.members.map((m) => (
           <li key={m.userId}>
-            <span className="f-name member-list__name">
-              {m.displayName}
-              {m.me ? ' (คุณ)' : ''}
+            <span className="member-list__name">
+              <MemberMark name={`${m.displayName}${m.me ? ' (คุณ)' : ''}`} color={m.color} />
             </span>
             <span className="tag">{ROLE_TEXT[m.role]}</span>
             {w.can.manageMembers && !m.me ? (
@@ -222,6 +226,47 @@ function GroupBody({
         <Button icon={UserPlus} onClick={() => setDialog({ kind: 'add' })}>
           เพิ่มสมาชิก
         </Button>
+      ) : null}
+
+      {!personal && myMember && color ? (
+        <section className="color-pick" aria-labelledby="my-color">
+          <h3 className="section-title" id="my-color">
+            สีประจำตัวของฉันในกลุ่มนี้
+          </h3>
+          <p className="f-hint">
+            สมาชิกคนอื่นเห็นสีนี้คู่กับชื่อของคุณ เฉพาะในกลุ่มนี้และเฉพาะนัดหมายที่เขามีสิทธิ์เห็นอยู่แล้ว — ไม่เกี่ยวกับสีหมวดนัดหมาย
+          </p>
+          <ColorPicker value={color} onChange={setColor} name={`color-${w.workspace.id}`} />
+          <div className="btn-row">
+            <Button
+              variant="dark"
+              busy={colorBusy}
+              disabled={color === myMember.color}
+              onClick={async () => {
+                const r = await colorRun(() => api.setMyColor(w.workspace.id, color));
+                if (r) await done('บันทึกสีประจำตัวแล้ว');
+              }}
+            >
+              บันทึกสี
+            </Button>
+            {myMember.customColor ? (
+              <Button
+                variant="ghost"
+                busy={colorBusy}
+                onClick={async () => {
+                  const r = await colorRun(() => api.setMyColor(w.workspace.id, null));
+                  if (r) {
+                    setColor(r.color);
+                    await done('กลับไปใช้สีเริ่มต้นแล้ว');
+                  }
+                }}
+              >
+                ใช้สีเริ่มต้น
+              </Button>
+            ) : null}
+          </div>
+          {colorError ? <Notice tone="caution">{errorText(colorError)}</Notice> : null}
+        </section>
       ) : null}
 
       {w.destinations.length ? (

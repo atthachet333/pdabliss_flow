@@ -50,6 +50,7 @@ export default function AuthApp() {
         client={client}
         onLogout={logout}
         onAccountChanged={refresh}
+        onReauthenticate={() => controller.reauthenticate(window.location.pathname)}
         key={view.user.id}
       />
     );

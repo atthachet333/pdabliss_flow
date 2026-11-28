@@ -97,3 +97,11 @@ test. Record the pass/fail outcomes and endpoint restoration without personal da
 The condominium guarded `-Stop` and `-Status` commands found no recorded FLOW session or listener on the FLOW ports. MariaDB stayed running. Confirm canonical LIFF endpoint restoration and **Use webhook** off in LINE Developers, and then complete the outbound usage review.
 
 The owner authorized the office handover checkpoint on `main`. Final EP02 acceptance follows the pending real LINE scenarios, iOS WebKit and iPhone regression, and closure of RD01–RD06 and RD08. RD07 remains an enhancement proposal subject to owner approval.
+
+## 8. EP02 consolidated (28 Nov 2026)
+
+The consolidated application adds recurring items, bills, member colours and the `/admin`
+Administration Center. It is implemented and locally verified on the condominium workstation.
+Apply the new migration with the guarded commands (`node scripts/db.mjs deploy dev`), already
+done on this workstation. The remaining real LINE checks and the exact guarded integration
+commands are in [EP02-FINAL-ACCEPTANCE.md](EP02-FINAL-ACCEPTANCE.md).

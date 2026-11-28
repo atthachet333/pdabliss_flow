@@ -5,7 +5,10 @@
  */
 import { z } from 'zod';
 import { CATEGORY_IDS, type CategoryId } from './domain.js';
-import { MAX_REMINDER_RULES } from './reminder-rules.js';
+import type { MemberColorId } from './member-colors.js';
+import { amountSchema, BILL_CURRENCIES, type BillCurrency, type PaymentStatus } from './money.js';
+import { recurrenceSchema, type RecurrenceRule, type SeriesScope } from './recurrence.js';
+import { MAX_REMINDER_RULES, type ReminderRuleStatus } from './reminder-rules.js';
 import { isValidLocalDate, isValidLocalTime } from './time.js';
 
 export const APPOINTMENT_TITLE_MAX = 120;
@@ -78,9 +81,23 @@ export const appointmentInputSchema = z
       .default([]),
     confirmSensitive: z.boolean().default(false),
     reminders: z.array(reminderRuleSchema).max(MAX_REMINDER_RULES).default([]),
+    /** EVENT (default) or BILL (a user-reported, optionally recurring payment due date). */
+    kind: z.enum(['EVENT', 'BILL']).default('EVENT'),
+    bill: z
+      .object({
+        amount: amountSchema.nullable().default(null),
+        currency: z.enum(BILL_CURRENCIES).default('THB'),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    /** Create a recurring series (create, or a FUTURE/ALL edit). Absent/null = once. */
+    recurrence: recurrenceSchema.nullable().optional(),
   })
   .strict()
   .superRefine((v, ctx) => {
+    if (v.kind !== 'BILL' && v.bill)
+      ctx.addIssue({ code: 'custom', path: ['bill'], message: 'only for BILL' });
     if (!v.allDay && !v.startTime)
       ctx.addIssue({ code: 'custom', path: ['startTime'], message: 'required' });
     const ids = v.destinations.map((d) => d.destinationId);
@@ -98,10 +115,20 @@ export const appointmentInputSchema = z
 export type AppointmentInput = z.infer<typeof appointmentInputSchema>;
 export type AppointmentInputDraft = z.input<typeof appointmentInputSchema>;
 
+export const seriesScopeSchema = z.enum(['THIS', 'FUTURE', 'ALL']);
+
 export const appointmentUpdateSchema = z.object({
   version: z.number().int().min(1),
   appointment: z.unknown(),
+  /** Recurring items only; one-off appointments ignore it. Default THIS. */
+  scope: seriesScopeSchema.optional(),
 });
+
+export const paymentUpdateSchema = z
+  .object({ version: z.number().int().min(1), status: z.enum(['UNPAID', 'PAID']) })
+  .strict();
+
+export const memberColorUpdateSchema = z.object({ color: z.string().max(16).nullable() }).strict();
 
 // ───────────────────────── response DTOs ─────────────────────────
 
@@ -121,7 +148,13 @@ export interface WorkspaceSummaryDto {
 export interface MeDto {
   user: { id: string; displayName: string; status: UserStatusDto; globalRole: GlobalRoleDto };
   workspaces: WorkspaceSummaryDto[];
-  permissions: { ownerConsole: boolean; manageRoles: boolean; manageDestinations: boolean };
+  permissions: {
+    ownerConsole: boolean;
+    manageRoles: boolean;
+    manageDestinations: boolean;
+    /** Owner-only operational areas of /admin (activity, quota, friends, health). */
+    platformOperations: boolean;
+  };
   adminBadge: { pendingRequests: number; pendingGroups: number } | null;
   preferences: PreferencesDto;
   access: { requestStatus: 'none' | 'pending' | 'rejected'; invitedWorkspaceName: string | null };
@@ -141,9 +174,24 @@ export interface ReminderDto {
   dayOffset: number | null;
   localTime: string | null;
   enabled: boolean;
-  status: 'SCHEDULED' | 'PAST' | 'DISABLED' | 'DUPLICATE' | 'CANCELLED';
+  status: ReminderRuleStatus;
   fireAt: string | null;
   labelTh: string;
+}
+
+export interface BillDto {
+  amount: string | null;
+  currency: BillCurrency;
+  paymentStatus: PaymentStatus;
+  /** User-reported only — never bank-verified. */
+  paidAt: string | null;
+}
+
+export interface SeriesRefDto {
+  id: string;
+  frequency: RecurrenceRule['frequency'];
+  occurrenceDate: string;
+  isException: boolean;
 }
 
 export interface AppointmentSummaryDto {
@@ -164,6 +212,11 @@ export interface AppointmentSummaryDto {
   status: 'SCHEDULED' | 'CANCELLED';
   mine: boolean;
   scheduledReminders: number;
+  kind: 'EVENT' | 'BILL';
+  bill: BillDto | null;
+  series: SeriesRefDto | null;
+  /** Shared workspaces only: who created it, with their identity colour in this workspace. */
+  creator: { displayName: string; color: MemberColorId } | null;
 }
 
 export interface AppointmentDetailDto extends AppointmentSummaryDto {
@@ -182,7 +235,17 @@ export interface AppointmentDetailDto extends AppointmentSummaryDto {
   createdAt: string;
   updatedAt: string;
   cancelledAt: string | null;
+  recurrence: {
+    rule: RecurrenceRule;
+    startDate: string;
+    status: 'ACTIVE' | 'ENDED' | 'CANCELLED';
+    descriptionTh: string;
+    generatedThrough: string | null;
+  } | null;
+  paidBy: string | null;
 }
+
+export type { SeriesScope };
 
 export interface DestinationOptionDto {
   id: string;

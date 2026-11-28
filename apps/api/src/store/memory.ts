@@ -18,6 +18,9 @@ import {
   type LineIdentityRow,
   type MemberRow,
   type PreferenceRow,
+  type ReminderActivityRow,
+  type ReminderStatus,
+  type SeriesRow,
   type SessionRow,
   type Store,
   StoreConflictError,
@@ -49,6 +52,7 @@ interface State {
   idem: Map<string, IdempotencyRow>;
   prefs: Map<string, PreferenceRow>;
   audit: AuditRow[];
+  series: Map<string, SeriesRow>;
 }
 
 function emptyState(): State {
@@ -72,6 +76,23 @@ function emptyState(): State {
     idem: new Map(),
     prefs: new Map(),
     audit: [],
+    series: new Map(),
+  };
+}
+
+/** Rows written before EP02 consolidated (or by older tests) get the new columns' defaults. */
+function withAppointmentDefaults(a: AppointmentRow): AppointmentRow {
+  return {
+    ...a,
+    kind: a.kind ?? 'EVENT',
+    seriesId: a.seriesId ?? null,
+    occurrenceDate: a.occurrenceDate ?? null,
+    isException: a.isException ?? false,
+    amount: a.amount ?? null,
+    currency: a.currency ?? null,
+    paymentStatus: a.paymentStatus ?? null,
+    paidAt: a.paidAt ?? null,
+    paidByUserId: a.paidByUserId ?? null,
   };
 }
 
@@ -166,6 +187,8 @@ export class MemoryStore implements Store {
   }
   async listUsers(q: {
     statuses?: UserRow['status'][];
+    globalRoles?: UserRow['globalRole'][];
+    ids?: string[];
     text?: string;
     limit: number;
     offset?: number;
@@ -173,6 +196,8 @@ export class MemoryStore implements Store {
     const t = q.text?.toLowerCase();
     return [...this.s.users.values()]
       .filter((u) => !q.statuses || q.statuses.includes(u.status))
+      .filter((u) => !q.globalRoles || q.globalRoles.includes(u.globalRole))
+      .filter((u) => !q.ids || q.ids.includes(u.id))
       .filter((u) => !t || u.displayName.toLowerCase().includes(t))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || a.id.localeCompare(b.id))
       .slice(q.offset ?? 0, (q.offset ?? 0) + q.limit)
@@ -375,6 +400,15 @@ export class MemoryStore implements Store {
     for (const w of this.s.workspaces.values()) if (w.personalOwnerId === userId) return clone(w);
     return null;
   }
+  async countWorkspaces(q: {
+    statuses?: WorkspaceRow['status'][];
+    kinds?: WorkspaceRow['kind'][];
+  }) {
+    return [...this.s.workspaces.values()].filter(
+      (w) =>
+        (!q.statuses || q.statuses.includes(w.status)) && (!q.kinds || q.kinds.includes(w.kind)),
+    ).length;
+  }
   async listWorkspaces(q: { ids?: string[]; statuses?: WorkspaceRow['status'][]; limit: number }) {
     return [...this.s.workspaces.values()]
       .filter(
@@ -407,8 +441,9 @@ export class MemoryStore implements Store {
         return clone(m);
       }
     }
-    this.s.members.set(row.id, clone(row));
-    return clone(row);
+    const created = { ...row, colorToken: row.colorToken ?? null };
+    this.s.members.set(row.id, clone(created));
+    return clone(created);
   }
   async getMember(workspaceId: string, userId: string) {
     for (const m of this.s.members.values())
@@ -430,7 +465,7 @@ export class MemoryStore implements Store {
   async updateMember(
     workspaceId: string,
     userId: string,
-    patch: Partial<Pick<MemberRow, 'role' | 'status'>>,
+    patch: Partial<Pick<MemberRow, 'role' | 'status' | 'colorToken'>>,
     now: Date,
   ) {
     for (const m of this.s.members.values()) {
@@ -557,11 +592,132 @@ export class MemoryStore implements Store {
     }
   }
   async createAppointment(b: AppointmentBundle) {
-    if (!this.s.workspaces.has(b.appointment.workspaceId))
-      throw new StoreConflictError('workspace.fk');
-    if (this.s.appointments.has(b.appointment.id)) throw new StoreConflictError('appointment.id');
-    this.s.appointments.set(b.appointment.id, clone(b.appointment));
-    this.replaceChildren(b.appointment.id, b);
+    const a = withAppointmentDefaults(b.appointment);
+    if (!this.s.workspaces.has(a.workspaceId)) throw new StoreConflictError('workspace.fk');
+    if (this.s.appointments.has(a.id)) throw new StoreConflictError('appointment.id');
+    if (a.seriesId) {
+      if (!this.s.series.has(a.seriesId)) throw new StoreConflictError('series.fk');
+      for (const x of this.s.appointments.values())
+        if (x.seriesId === a.seriesId && x.occurrenceDate === a.occurrenceDate)
+          throw new StoreConflictError('appointments_seriesId_occurrenceDate_key');
+    }
+    this.s.appointments.set(a.id, clone(a));
+    this.replaceChildren(a.id, b);
+  }
+  async createAppointments(bundles: AppointmentBundle[]) {
+    for (const b of bundles) await this.createAppointment(b);
+  }
+  async appendAppointmentEvents(rows: AppointmentEventRow[]) {
+    for (const r of rows) this.s.events.push(clone(r));
+  }
+  async deleteAppointments(ids: string[]) {
+    let n = 0;
+    for (const id of ids) {
+      if (!this.s.appointments.delete(id)) continue;
+      n += 1;
+      for (const [k, g] of this.s.access) if (g.appointmentId === id) this.s.access.delete(k);
+      for (const [k, d] of this.s.apptDest) if (d.appointmentId === id) this.s.apptDest.delete(k);
+      for (const [k, r] of this.s.rules) if (r.appointmentId === id) this.s.rules.delete(k);
+      this.s.events = this.s.events.filter((e) => e.appointmentId !== id);
+    }
+    return n;
+  }
+  async listSeriesOccurrences(seriesId: string, fromDate?: string) {
+    return [...this.s.appointments.values()]
+      .filter((a) => a.seriesId === seriesId && (!fromDate || (a.occurrenceDate ?? '') >= fromDate))
+      .sort((a, b) => (a.occurrenceDate ?? '').localeCompare(b.occurrenceDate ?? ''))
+      .map((a) => this.bundle(a));
+  }
+  async moveOccurrences(ids: string[], seriesId: string) {
+    if (!this.s.series.has(seriesId)) throw new StoreConflictError('series.fk');
+    const moving = ids
+      .map((id) => this.s.appointments.get(id))
+      .filter((a): a is AppointmentRow => !!a);
+    for (const a of moving)
+      for (const x of this.s.appointments.values())
+        if (!ids.includes(x.id) && x.seriesId === seriesId && x.occurrenceDate === a.occurrenceDate)
+          throw new StoreConflictError('appointments_seriesId_occurrenceDate_key');
+    for (const a of moving) a.seriesId = seriesId;
+    return moving.length;
+  }
+
+  // ───────── recurring series
+  async createSeries(row: SeriesRow) {
+    if (this.s.series.has(row.id)) throw new StoreConflictError('series.id');
+    if (!this.s.workspaces.has(row.workspaceId)) throw new StoreConflictError('workspace.fk');
+    this.s.series.set(row.id, clone(row));
+  }
+  async getSeries(id: string) {
+    const r = this.s.series.get(id);
+    return r ? clone(r) : null;
+  }
+  async updateSeries(
+    id: string,
+    expectedVersion: number,
+    patch: Partial<
+      Omit<SeriesRow, 'id' | 'version' | 'createdAt' | 'createdByUserId' | 'workspaceId'>
+    >,
+    now: Date,
+  ) {
+    const r = this.s.series.get(id);
+    if (!r || r.version !== expectedVersion) return null;
+    Object.assign(r, clone(patch), { updatedAt: now, version: r.version + 1 });
+    return clone(r);
+  }
+  async listSeriesNeedingExtension(before: string, limit: number) {
+    return [...this.s.series.values()]
+      .filter((r) => r.status === 'ACTIVE' && (r.generatedThrough ?? '') < before)
+      .sort((a, b) => (a.generatedThrough ?? '').localeCompare(b.generatedThrough ?? ''))
+      .slice(0, limit)
+      .map(clone);
+  }
+
+  // ───────── operations
+  async listReminderActivity(q: {
+    fireFrom: Date;
+    fireTo: Date;
+    statuses?: ReminderStatus[];
+    workspaceIds?: string[];
+    limit: number;
+    offset?: number;
+  }): Promise<ReminderActivityRow[]> {
+    const rows = [...this.s.rules.values()]
+      .filter((r) => r.fireAt && r.fireAt >= q.fireFrom && r.fireAt <= q.fireTo)
+      .filter((r) => !q.statuses || q.statuses.includes(r.status))
+      .filter((r) => {
+        const a = this.s.appointments.get(r.appointmentId);
+        return !!a && (!q.workspaceIds || q.workspaceIds.includes(a.workspaceId));
+      })
+      .sort(
+        (a, b) =>
+          (a.fireAt as Date).getTime() - (b.fireAt as Date).getTime() || a.id.localeCompare(b.id),
+      )
+      .slice(q.offset ?? 0, (q.offset ?? 0) + q.limit);
+    return rows.map((r) => ({
+      rule: clone(r),
+      bundle: this.bundle(this.s.appointments.get(r.appointmentId) as AppointmentRow),
+    }));
+  }
+  async countReminderRules(q: { statuses?: ReminderStatus[]; fireFrom?: Date; fireTo?: Date }) {
+    const out: Partial<Record<ReminderStatus, number>> = {};
+    for (const r of this.s.rules.values()) {
+      if (q.statuses && !q.statuses.includes(r.status)) continue;
+      if (q.fireFrom && (!r.fireAt || r.fireAt < q.fireFrom)) continue;
+      if (q.fireTo && (!r.fireAt || r.fireAt > q.fireTo)) continue;
+      out[r.status] = (out[r.status] ?? 0) + 1;
+    }
+    return out;
+  }
+  async countAudit(q: { since: Date }) {
+    return this.s.audit.filter((a) => a.createdAt >= q.since).length;
+  }
+  async listIdentities(userIds: string[]) {
+    return [...this.s.identities.values()].filter((i) => userIds.includes(i.userId)).map(clone);
+  }
+  async countOpenSessions(userId: string, now: Date) {
+    return [...this.s.sessions.values()].filter(
+      (x) => x.userId === userId && !x.endedAt && x.absoluteExpiresAt > now,
+    ).length;
   }
   async getAppointment(id: string) {
     const a = this.s.appointments.get(id);
@@ -579,7 +735,11 @@ export class MemoryStore implements Store {
   ) {
     const a = this.s.appointments.get(id);
     if (!a || a.version !== expectedVersion) return false;
-    this.s.appointments.set(id, { ...clone(next.appointment), id, version: expectedVersion + 1 });
+    this.s.appointments.set(id, {
+      ...withAppointmentDefaults(clone(next.appointment)),
+      id,
+      version: expectedVersion + 1,
+    });
     this.replaceChildren(id, next);
     return true;
   }

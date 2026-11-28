@@ -85,6 +85,8 @@ export async function ensureMember(
     role,
     status: 'ACTIVE',
     addedByUserId: addedBy,
+    // The member's own colour choice survives re-adds and role changes.
+    colorToken: existing?.colorToken ?? null,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   });
@@ -303,11 +305,26 @@ export class IdentityService {
     if (owners <= 1) throw conflictError('LAST_OWNER', 'The last active owner cannot be removed');
   }
 
+  /**
+   * Account lifecycle (Owner Console / Administration Center).
+   *  - suspend: temporary; memberships kept, sessions ended, private notifications disabled.
+   *  - reinstate: SUSPENDED → ACTIVE with the same memberships.
+   *  - revoke: platform access removed; sessions ended; non-personal memberships removed,
+   *    global ADMIN dropped to USER, LINE-group send grants removed and the private chat
+   *    disabled. Appointments are never deleted — shared company appointments stay with
+   *    their workspace; history and audit evidence are preserved.
+   *  - reactivate: REVOKED/REJECTED → ACTIVE with ONLY the explicitly reviewed `assignments`
+   *    (old privileges are never restored blindly). Stale reminders are not replayed: EP03
+   *    never delivers a reminder whose time has passed (shared reminderEligibility).
+   */
   async setUserStatus(
     admin: Actor,
     userId: string,
     action: 'suspend' | 'reinstate' | 'revoke' | 'reactivate',
+    assignments: { workspaceId: string; role: WorkspaceRole }[] = [],
   ): Promise<UserRow> {
+    if (action !== 'reactivate' && assignments.length)
+      throw badRequest('ASSIGNMENTS_ONLY_ON_REACTIVATE');
     const now = this.clock();
     const result = await this.store.transaction(async (tx) => {
       const target = await tx.getUser(userId);
@@ -325,15 +342,65 @@ export class IdentityService {
       const to: UserRow['status'] =
         action === 'suspend' ? 'SUSPENDED' : action === 'revoke' ? 'REVOKED' : 'ACTIVE';
       if (to !== 'ACTIVE') await this.assertNotLastOwner(tx, target);
+      for (const a of assignments) {
+        const ws = await tx.getWorkspace(a.workspaceId);
+        if (!ws || ws.status !== 'ACTIVE' || ws.kind === 'PERSONAL')
+          throw badRequest('INVALID_WORKSPACE');
+      }
       const updated = await tx.updateUser(
         target.id,
-        { status: to, statusChangedAt: now },
+        {
+          status: to,
+          statusChangedAt: now,
+          // Revocation removes platform administration; reactivation never restores it.
+          ...(action === 'revoke' && target.globalRole === 'ADMIN'
+            ? { globalRole: 'USER' as const }
+            : {}),
+        },
         { now, bumpAuthz: true },
       );
       if (!updated) throw conflictError();
+      const privateChat = await tx.getPrivateDestination(target.id);
       if (to === 'ACTIVE') {
         await ensurePersonalWorkspace(tx, updated, now);
         await ensurePrivateDestination(tx, updated.id, now);
+        if (privateChat && privateChat.status === 'DISABLED')
+          await tx.updateDestination(privateChat.id, { status: 'ACTIVE' }, now);
+        for (const a of assignments) {
+          await ensureMember(tx, a.workspaceId, target.id, a.role, admin.user.id, now);
+          await audit(tx, {
+            actorUserId: admin.user.id,
+            action: 'membership.added',
+            resourceType: 'workspace',
+            resourceId: a.workspaceId,
+            workspaceId: a.workspaceId,
+            meta: { targetUserId: target.id, role: a.role, reason: 'reactivation-review' },
+            at: now,
+          });
+        }
+      } else if (privateChat && privateChat.status === 'ACTIVE') {
+        // No private notification may reach a suspended or revoked account.
+        await tx.updateDestination(privateChat.id, { status: 'DISABLED' }, now);
+      }
+      if (action === 'revoke') {
+        let removed = 0;
+        for (const m of await tx.listMembershipsForUser(target.id, ['ACTIVE'])) {
+          const ws = await tx.getWorkspace(m.workspaceId);
+          if (!ws || ws.kind === 'PERSONAL') continue;
+          await tx.updateMember(m.workspaceId, target.id, { status: 'REMOVED' }, now);
+          removed += 1;
+        }
+        for (const g of await tx.listDestinationGrants({ userId: target.id }))
+          await tx.deleteDestinationGrant(g.destinationId, target.id);
+        if (removed)
+          await audit(tx, {
+            actorUserId: admin.user.id,
+            action: 'membership.removed',
+            resourceType: 'user',
+            resourceId: target.id,
+            meta: { count: removed, reason: 'revocation' },
+            at: now,
+          });
       }
       if (from === 'PENDING') {
         const open = await tx.getOpenAccessRequest(target.id);

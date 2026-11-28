@@ -647,7 +647,8 @@ function UserDetail() {
 
 // ───────────────────────── invitations
 
-function Invitations() {
+/** Also embedded by the desktop Administration Center (/admin). */
+export function Invitations() {
   const { api, toast } = useApp();
   const load = useLoad(() => api.invitations(), 'invitations');
   const spaces = useLoad(() => api.adminWorkspaces(), 'admin-ws');
@@ -806,7 +807,8 @@ function Invitations() {
 
 // ───────────────────────── LINE groups (owner only)
 
-function LineGroups() {
+/** Also embedded by the desktop Administration Center (/admin). */
+export function LineGroups() {
   const { api, me, reloadMe, toast } = useApp();
   const load = useLoad(() => api.adminDestinations(), 'admin-dest');
   const spaces = useLoad(() => api.adminWorkspaces(), 'admin-ws');
@@ -959,7 +961,8 @@ function LineGroups() {
 
 // ───────────────────────── audit
 
-function Audit() {
+/** Also embedded by the desktop Administration Center (/admin). */
+export function Audit() {
   const { api } = useApp();
   const [offset, setOffset] = useState(0);
   const load = useLoad(() => api.audit(offset), `audit|${offset}`);

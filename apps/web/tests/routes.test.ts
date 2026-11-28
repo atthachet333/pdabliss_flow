@@ -69,3 +69,41 @@ describe('client routes = gateway allow-list', () => {
     for (const p of CORPUS) assert.equal(isAppRoute(p), gateway.isAppRoute(p), p);
   });
 });
+
+describe('EP02 consolidated — Administration Center routes', () => {
+  const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  it('every /admin page is served on the same origin by both the client and the gateway', () => {
+    for (const p of [
+      '/admin',
+      '/admin/requests',
+      '/admin/users',
+      `/admin/users/${id}`,
+      '/admin/workspaces',
+      `/admin/workspaces/${id}`,
+      '/admin/permissions',
+      '/admin/invitations',
+      '/admin/groups',
+      '/admin/activity',
+      '/admin/notifications',
+      '/admin/quota',
+      '/admin/friends',
+      '/admin/health',
+      '/admin/audit',
+      '/admin/settings',
+    ]) {
+      assert.ok(isAppRoute(p), p);
+      assert.ok(gateway.isAppRoute(p), `gateway ${p}`);
+    }
+  });
+  it('unknown or malformed admin paths stay 404', () => {
+    for (const p of [
+      '/admin/',
+      '/admin/secret',
+      '/admin/users/1',
+      '/admin/users/x/edit',
+      '/ADMIN',
+      '/admin/../today',
+    ])
+      assert.equal(isAppRoute(p) || gateway.isAppRoute(p), false, p);
+  });
+});

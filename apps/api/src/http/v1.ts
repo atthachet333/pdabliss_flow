@@ -13,7 +13,11 @@ import {
   type ReminderRuleDto,
   DEFAULT_REMINDER_RULES,
   appointmentInputSchema,
+  effectiveMemberColor,
+  memberColorUpdateSchema,
+  paymentUpdateSchema,
   reminderRuleSchema,
+  seriesScopeSchema,
 } from '@flow/shared';
 import {
   ApiError,
@@ -28,6 +32,7 @@ import { safeEqual } from '../auth/persistent.js';
 import type { AppointmentService } from '../domain/appointments.js';
 import type { DestinationService } from '../domain/destinations.js';
 import type { IdentityService } from '../domain/identity.js';
+import { maskLineId, type OperationsService } from '../domain/operations.js';
 import {
   DEFAULT_INVITATION_HOURS,
   type InvitationService,
@@ -38,12 +43,13 @@ import {
   canAdministerUser,
   canGlobal,
   canInWorkspace,
+  isOwner,
   roleIn,
 } from '../domain/policy.js';
 import type { WorkspaceService } from '../domain/workspaces.js';
 import type { LineMessagingReader } from '../line/messaging.js';
 import type { Store, UserRow } from '../store/types.js';
-import { type RequestAuth, authenticate, requireActive } from './context.js';
+import { type RequestAuth, authenticate, requireActive, requireRecentAuth } from './context.js';
 import { type CookieSettings, clientAddress, originAllowed } from './security.js';
 
 export interface V1Deps {
@@ -57,6 +63,7 @@ export interface V1Deps {
   invitations: InvitationService;
   destinations: DestinationService;
   appointments: AppointmentService;
+  operations: OperationsService;
   messaging: LineMessagingReader | null;
   publicBaseUrl: string | null;
   clock: Clock;
@@ -175,6 +182,7 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
             ownerConsole: admin,
             manageRoles: canGlobal(actor, 'users.role'),
             manageDestinations: canGlobal(actor, 'destinations.manage'),
+            platformOperations: isOwner(actor),
           },
           adminBadge: admin
             ? {
@@ -324,8 +332,22 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
             displayName: users.get(x.userId)?.displayName ?? '',
             role: x.role,
             me: x.userId === actor.user.id,
+            color: effectiveMemberColor(x.colorToken, id, x.userId),
+            customColor: x.colorToken !== null,
           })),
           destinations,
+        });
+      });
+
+      // Member identity colour: each member changes only their own, per workspace.
+      v1.put('/workspaces/:id/my-color', async (request, reply) => {
+        const { actor } = await auth(request);
+        const id = assertUuid((request.params as { id: string }).id);
+        const body = parse(memberColorUpdateSchema, request.body);
+        await deps.workspaces.setMyColor(actor, id, body.color);
+        return ok(reply, {
+          color: effectiveMemberColor(body.color, id, actor.user.id),
+          customColor: body.color !== null,
         });
       });
 
@@ -491,19 +513,41 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
         const { actor } = await auth(request);
         const id = assertUuid((request.params as { id: string }).id);
         const body = parse(
-          z.object({ version: z.number().int().min(1), appointment: z.unknown() }).strict(),
+          z
+            .object({
+              version: z.number().int().min(1),
+              appointment: z.unknown(),
+              scope: seriesScopeSchema.default('THIS'),
+            })
+            .strict(),
           request.body,
         );
         const input = parse(appointmentInputSchema, body.appointment);
-        await deps.appointments.update(actor, id, body.version, input);
-        return ok(reply, { appointment: await deps.appointments.detail(actor, id) });
+        const r = await deps.appointments.update(actor, id, body.version, input, body.scope);
+        return ok(reply, { appointment: await deps.appointments.detail(actor, r.id) });
       });
 
       v1.post('/appointments/:id/cancel', async (request, reply) => {
         const { actor } = await auth(request);
         const id = assertUuid((request.params as { id: string }).id);
-        const body = parse(z.object({ version: z.number().int().min(1) }).strict(), request.body);
-        await deps.appointments.cancel(actor, id, body.version);
+        const body = parse(
+          z
+            .object({ version: z.number().int().min(1), scope: seriesScopeSchema.default('THIS') })
+            .strict(),
+          request.body,
+        );
+        await deps.appointments.cancel(actor, id, body.version, body.scope);
+        // A cancelled series occurrence may have been removed as derived data; THIS always stays.
+        const after = await deps.appointments.detail(actor, id).catch(() => null);
+        return ok(reply, { appointment: after });
+      });
+
+      // Bills: user-reported paid/unpaid for ONE occurrence (never bank-verified).
+      v1.post('/appointments/:id/payment', async (request, reply) => {
+        const { actor } = await auth(request);
+        const id = assertUuid((request.params as { id: string }).id);
+        const body = parse(paymentUpdateSchema, request.body);
+        await deps.appointments.setPayment(actor, id, body.version, body.status);
         return ok(reply, { appointment: await deps.appointments.detail(actor, id) });
       });
 
@@ -596,6 +640,87 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
         });
       });
 
+      /** Owner-only operational areas (activity, quota, friends, health, notifications). */
+      const operations = async (request: FastifyRequest) => {
+        const a = await admin(request);
+        if (!isOwner(a.actor)) throw notFound();
+        return a;
+      };
+      /** Sensitive privileged writes additionally need a recent LINE login. */
+      const sensitive = async (request: FastifyRequest) => {
+        const a = await admin(request);
+        requireRecentAuth(a, deps.clock());
+        return a;
+      };
+
+      v1.get('/admin/overview', async (request, reply) => {
+        const { actor } = await admin(request);
+        return ok(reply, await deps.operations.overview(actor));
+      });
+
+      v1.get('/admin/activity', async (request, reply) => {
+        const { actor } = await operations(request);
+        const q = parse(
+          pageQuery.extend({
+            from: dateStr,
+            to: dateStr,
+            status: z
+              .enum(['SCHEDULED', 'PAST', 'DISABLED', 'DUPLICATE', 'CANCELLED', 'SUPPRESSED'])
+              .optional(),
+            workspaceId: z.string().optional(),
+          }),
+          request.query,
+        );
+        return ok(
+          reply,
+          await deps.operations.activity(actor, {
+            from: q.from,
+            to: q.to,
+            ...(q.status ? { status: q.status } : {}),
+            ...(q.workspaceId ? { workspaceId: assertUuid(q.workspaceId) } : {}),
+            limit: q.limit,
+            offset: q.offset,
+          }),
+        );
+      });
+
+      v1.get('/admin/quota', async (request, reply) => {
+        const { actor } = await operations(request);
+        return ok(reply, await deps.operations.quota(actor));
+      });
+
+      v1.get('/admin/friends', async (request, reply) => {
+        const { actor } = await operations(request);
+        const q = parse(
+          pageQuery.extend({
+            q: z.string().max(60).optional(),
+            status: z
+              .enum(['NEW', 'PENDING', 'ACTIVE', 'REJECTED', 'SUSPENDED', 'REVOKED'])
+              .optional(),
+          }),
+          request.query,
+        );
+        return ok(
+          reply,
+          await deps.operations.friends(actor, {
+            ...(q.q ? { text: q.q } : {}),
+            ...(q.status ? { status: q.status } : {}),
+            limit: q.limit,
+            offset: q.offset,
+          }),
+        );
+      });
+
+      v1.get('/admin/health', async (request, reply) => {
+        const { actor } = await operations(request);
+        return ok(reply, await deps.operations.health(actor));
+      });
+
+      v1.get('/admin/notifications', async (request, reply) => {
+        const { actor } = await operations(request);
+        return ok(reply, await deps.operations.notifications(actor));
+      });
+
       v1.get('/admin/access-requests', async (request, reply) => {
         await admin(request);
         const q = parse(
@@ -605,6 +730,9 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
         const rows = await store.listAccessRequests({ statuses: [q.status], limit: 100 });
         const users = new Map(
           (await store.getUsers(rows.map((r) => r.userId))).map((u) => [u.id, u]),
+        );
+        const identities = new Map(
+          (await store.listIdentities(rows.map((r) => r.userId))).map((i) => [i.userId, i]),
         );
         const wsIds = [
           ...new Set(rows.map((r) => r.targetWorkspaceId).filter((x): x is string => !!x)),
@@ -622,6 +750,11 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
             message: r.message,
             createdAt: r.createdAt.toISOString(),
             user: users.get(r.userId) ? userDto(users.get(r.userId) as UserRow) : null,
+            // Server-verified LINE identity, masked. Display names are mutable and unverified.
+            maskedLineId: identities.get(r.userId)
+              ? maskLineId((identities.get(r.userId) as { lineUserId: string }).lineUserId)
+              : null,
+            decidedAt: r.decidedAt?.toISOString() ?? null,
             viaInvitation: r.invitationId !== null,
             target: r.targetWorkspaceId
               ? {
@@ -667,18 +800,37 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
         const q = parse(
           pageQuery.extend({
             status: z
-              .enum(['NEW', 'PENDING', 'ACTIVE', 'REJECTED', 'SUSPENDED', 'REVOKED'])
+              .enum(['NEW', 'PENDING', 'ACTIVE', 'REJECTED', 'SUSPENDED', 'REVOKED', 'RESTRICTED'])
               .optional(),
+            role: z.enum(['OWNER', 'ADMIN', 'USER']).optional(),
+            workspaceId: z.string().optional(),
             q: z.string().max(60).optional(),
           }),
           request.query,
         );
-        const rows = await store.listUsers({
-          ...(q.status ? { statuses: [q.status] } : {}),
-          ...(q.q ? { text: q.q } : {}),
-          limit: q.limit + 1,
-          offset: q.offset,
-        });
+        let ids: string[] | undefined;
+        if (q.workspaceId) {
+          const wsId = assertUuid(q.workspaceId);
+          const ws = await store.getWorkspace(wsId);
+          // Personal workspaces are never browsable from the administration area.
+          ids =
+            ws && ws.kind !== 'PERSONAL'
+              ? (await store.listMembers(wsId, ['ACTIVE'])).map((m) => m.userId)
+              : [];
+        }
+        const rows =
+          ids && ids.length === 0
+            ? []
+            : await store.listUsers({
+                ...(q.status
+                  ? { statuses: q.status === 'RESTRICTED' ? ['SUSPENDED', 'REVOKED'] : [q.status] }
+                  : {}),
+                ...(q.role ? { globalRoles: [q.role] } : {}),
+                ...(ids ? { ids } : {}),
+                ...(q.q ? { text: q.q } : {}),
+                limit: q.limit + 1,
+                offset: q.offset,
+              });
         return ok(reply, {
           items: rows.slice(0, q.limit).map(userDto),
           limit: q.limit,
@@ -701,8 +853,12 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
         const history = (await store.listAudit({ resourceTypes: ['user'], limit: 200 }))
           .filter((a) => a.resourceId === id)
           .slice(0, 20);
+        const identity = await store.getIdentityByUserId(id);
         return ok(reply, {
           user: userDto(u),
+          maskedLineId: identity ? maskLineId(identity.lineUserId) : null,
+          openSessions: await store.countOpenSessions(id, deps.clock()),
+          statusChangedAt: u.statusChangedAt?.toISOString() ?? null,
           can: {
             administer: canAdministerUser(actor, u),
             changeRole:
@@ -725,21 +881,31 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
       });
 
       v1.post('/admin/users/:id/status', async (request, reply) => {
-        const { actor } = await admin(request);
+        const { actor } = await sensitive(request);
         const body = parse(
-          z.object({ action: z.enum(['suspend', 'reinstate', 'revoke', 'reactivate']) }).strict(),
+          z
+            .object({
+              action: z.enum(['suspend', 'reinstate', 'revoke', 'reactivate']),
+              // Reactivation: the explicitly reviewed memberships (nothing is restored blindly).
+              assignments: z
+                .array(z.object({ workspaceId: z.string(), role: roleSchema }).strict())
+                .max(20)
+                .default([]),
+            })
+            .strict(),
           request.body,
         );
         const u = await deps.identity.setUserStatus(
           actor,
           assertUuid((request.params as { id: string }).id),
           body.action,
+          body.assignments.map((a) => ({ workspaceId: assertUuid(a.workspaceId), role: a.role })),
         );
         return ok(reply, { user: userDto(u) });
       });
 
       v1.post('/admin/users/:id/role', async (request, reply) => {
-        const { actor } = await admin(request);
+        const { actor } = await sensitive(request);
         const body = parse(
           z.object({ globalRole: z.enum(['ADMIN', 'USER']) }).strict(),
           request.body,
@@ -753,11 +919,14 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
       });
 
       v1.put('/admin/users/:id/memberships', async (request, reply) => {
-        const { actor } = await admin(request);
+        const a = await admin(request);
         const body = parse(
           z.object({ workspaceId: z.string(), role: roleSchema.nullable() }).strict(),
           request.body,
         );
+        // Removing a membership (offboarding option A) is sensitive; assigning is not.
+        if (body.role === null) requireRecentAuth(a, deps.clock());
+        const { actor } = a;
         await deps.identity.setMembership(
           actor,
           assertUuid((request.params as { id: string }).id),
@@ -774,13 +943,70 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
           items: await Promise.all(
             rows
               .filter((w) => w.kind !== 'PERSONAL')
-              .map(async (w) => ({
-                id: w.id,
-                name: w.name,
-                kind: w.kind,
-                memberCount: (await store.listMembers(w.id, ['ACTIVE'])).length,
-              })),
+              .map(async (w) => {
+                const members = await store.listMembers(w.id, ['ACTIVE']);
+                return {
+                  id: w.id,
+                  name: w.name,
+                  kind: w.kind,
+                  memberCount: members.length,
+                  roles: {
+                    ADMIN: members.filter((m) => m.role === 'ADMIN').length,
+                    MEMBER: members.filter((m) => m.role === 'MEMBER').length,
+                    VIEWER: members.filter((m) => m.role === 'VIEWER').length,
+                  },
+                  createdAt: w.createdAt.toISOString(),
+                };
+              }),
           ),
+          // Personal workspaces are counted, never listed or opened from administration.
+          personalCount: await store.countWorkspaces({ statuses: ['ACTIVE'], kinds: ['PERSONAL'] }),
+        });
+      });
+
+      v1.get('/admin/workspaces/:id', async (request, reply) => {
+        await admin(request);
+        const id = assertUuid((request.params as { id: string }).id);
+        const ws = await store.getWorkspace(id);
+        if (!ws || ws.kind === 'PERSONAL') throw notFound();
+        const members = await store.listMembers(id, ['ACTIVE']);
+        const users = new Map(
+          (await store.getUsers(members.map((m) => m.userId))).map((u) => [u.id, u]),
+        );
+        const groups = await store.listDestinations({
+          kinds: ['GROUP'],
+          workspaceIds: [id],
+          limit: 50,
+        });
+        const invitations = await store.listInvitations({ workspaceId: id, limit: 50 });
+        const now = deps.clock();
+        return ok(reply, {
+          workspace: {
+            id: ws.id,
+            name: ws.name,
+            kind: ws.kind,
+            status: ws.status,
+            createdAt: ws.createdAt.toISOString(),
+          },
+          members: members.map((m) => ({
+            userId: m.userId,
+            displayName: users.get(m.userId)?.displayName ?? '',
+            status: users.get(m.userId)?.status ?? 'ACTIVE',
+            globalRole: users.get(m.userId)?.globalRole ?? 'USER',
+            role: m.role,
+            color: effectiveMemberColor(m.colorToken, id, m.userId),
+            since: m.createdAt.toISOString(),
+          })),
+          groups: groups.map((g) => ({
+            id: g.id,
+            label: g.label,
+            status: g.status,
+            audienceSize: g.audienceSize,
+          })),
+          invitations: {
+            active: invitations.filter((i) => invitationState(i, now) === 'valid').length,
+            total: invitations.length,
+          },
         });
       });
 
@@ -915,7 +1141,8 @@ export function registerV1Routes(app: FastifyInstance, deps: V1Deps): void {
             resourceType: r.resourceType,
             actor: r.actorUserId ? (actors.get(r.actorUserId) ?? '') : 'ระบบ',
             at: r.createdAt.toISOString(),
-            meta: r.resourceType === 'appointment' ? null : r.metadata,
+            // Appointment, series and bill entries expose only the action and time.
+            meta: r.resourceType.startsWith('appointment') ? null : r.metadata,
           })),
           limit: q.limit,
           offset: q.offset,

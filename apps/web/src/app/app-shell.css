@@ -576,8 +576,65 @@
 }
 .grid-2 {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
   gap: var(--sp-3);
+}
+.grid-2 > *,
+.grid-3 > * {
+  min-width: 0;
+}
+
+/*
+ * RD01 — native date/time inputs. Root cause: grid items default to `min-width: auto`, and
+ * WebKit's native date/time controls report a wide intrinsic min-content width, so a field
+ * could not shrink below its control and overlapped the next column on narrow iPhones. Every
+ * cell and control may now shrink (min-width: 0), the date takes its own row and the two
+ * times share the next row as equal minmax(0, 1fr) tracks.
+ */
+.dt-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.dt-grid > .f-field {
+  min-width: 0;
+}
+.dt-grid > .f-field:first-child {
+  grid-column: 1 / -1;
+}
+.dt-grid--allday > .f-field {
+  grid-column: auto;
+}
+.dt-grid--allday > .f-field:first-child {
+  grid-column: auto;
+}
+.form input[type='date'],
+.form input[type='time'] {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+  text-align: left;
+}
+.form input[type='date']::-webkit-date-and-time-value,
+.form input[type='time']::-webkit-date-and-time-value {
+  text-align: left;
+  min-width: 0;
+}
+@media (min-width: 560px) {
+  .dt-grid:not(.dt-grid--allday) {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .dt-grid:not(.dt-grid--allday) > .f-field:first-child {
+    grid-column: auto;
+  }
+}
+.f-field,
+.fs {
+  min-width: 0;
 }
 .grid-3 {
   display: grid;
@@ -636,11 +693,27 @@
   gap: var(--sp-2);
   padding-left: var(--sp-4);
 }
+/*
+ * RD02 — sticky save. The bar stays above the tab bar; `scroll-padding-bottom` keeps any
+ * focused or scrolled-to control (reminders, destinations, validation messages, the last
+ * section) clear of it. The bar never moves when focus changes: moving it on blur made a
+ * tap on "Save" land on the wrong element while the keyboard was open (found in QA).
+ */
+html:has(.form) {
+  scroll-padding-bottom: calc(176px + env(safe-area-inset-bottom));
+  scroll-padding-top: calc(72px + env(safe-area-inset-top));
+}
 .form__actions {
   position: sticky;
   bottom: calc(76px + env(safe-area-inset-bottom));
-  padding-top: var(--sp-2);
-  background: linear-gradient(transparent, var(--canvas) 30%);
+  z-index: 4;
+  padding: var(--sp-3) 0 var(--sp-2);
+  background: linear-gradient(transparent, var(--canvas) 24%);
+}
+.form .f-field,
+.form .fs,
+.form .notice {
+  scroll-margin-bottom: calc(176px + env(safe-area-inset-bottom));
 }
 
 /* reminders */
@@ -1027,10 +1100,15 @@
   flex-wrap: wrap;
   gap: var(--sp-2);
 }
+/*
+ * RD05 — toasts sit under the app bar (top), away from the bottom action rows (Edit,
+ * Duplicate, Cancel, Save). They never take pointer events or focus; the live region still
+ * announces them to screen readers.
+ */
 .toasts {
   position: fixed;
   left: 50%;
-  bottom: calc(88px + env(safe-area-inset-bottom));
+  top: calc(64px + env(safe-area-inset-top));
   transform: translateX(-50%);
   z-index: 20;
   display: grid;
@@ -1085,4 +1163,156 @@
     grid-template-columns: 1fr;
     gap: 0;
   }
+}
+
+/* ---------------------------------------------------------------- RD04 greeting */
+.hero__greet {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.35em;
+  row-gap: 0;
+  align-items: baseline;
+}
+.hero__name {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- EP02 consolidated */
+.member-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 100%;
+}
+.member-mark__dot {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.member-mark--md .member-mark__dot {
+  width: 32px;
+  height: 32px;
+  font-size: 15px;
+}
+.member-mark__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.tag--series,
+.tag--bill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tag--series svg,
+.tag--bill svg {
+  width: 14px;
+  height: 14px;
+}
+.tag--bill {
+  background: var(--warning-tint, #faf3e3);
+  color: var(--warning, #8a5a00);
+}
+.tag--paid {
+  background: var(--success-tint, #e7f5ef);
+  color: var(--flow-emerald-700, #127261);
+}
+.appt__creator {
+  display: inline-flex;
+}
+.scope {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.scope__opt {
+  align-items: flex-start;
+  padding: var(--sp-2) var(--sp-3);
+}
+.scope__opt > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.scope__opt--on {
+  border-color: var(--flow-emerald);
+}
+.repeat {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  min-width: 0;
+}
+.repeat__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.repeat__num {
+  width: 6.5em;
+  max-width: 100%;
+}
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: var(--sp-2);
+}
+.swatch {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: var(--sp-2) 4px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  text-align: center;
+}
+.swatch input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.swatch__chip {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: #fff;
+}
+.swatch__chip svg {
+  width: 18px;
+  height: 18px;
+}
+.swatch input:focus-visible + .swatch__chip {
+  outline: 2px solid var(--flow-emerald);
+  outline-offset: 3px;
+}
+.swatch input:checked + .swatch__chip {
+  box-shadow:
+    0 0 0 2px var(--canvas),
+    0 0 0 4px var(--flow-forest);
+}
+.swatch__label {
+  font-size: var(--fs-xs);
+  color: var(--ink-muted);
 }

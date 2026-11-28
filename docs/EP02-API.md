@@ -40,3 +40,25 @@ Authentication routes (`/api/auth/*`) and the webhook keep the EP01 contract; se
 [EP01-ARCHITECTURE.md](EP01-ARCHITECTURE.md). Webhook events are deduplicated in MariaDB
 (7 days); a `join` creates a PENDING group registration, `leave` marks it REMOVED; nothing is
 sent back to LINE.
+
+## EP02 consolidated additions (2026-11-28)
+
+| Method & path                                                                 | Purpose                                                                                                   |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `POST /appointments` with `recurrence`                                        | Creates a series and its bounded occurrences and returns the first occurrence (same idempotency contract) |
+| `POST /appointments` with `kind: BILL`, `bill`                                | Bill with an optional exact decimal amount (`"1250.50"`, THB)                                             |
+| `PUT /appointments/:id` `{version, appointment, scope}`                       | `scope` THIS / FUTURE / ALL for recurring occurrences (default THIS)                                      |
+| `POST /appointments/:id/cancel` `{version, scope}`                            | Scoped cancellation; THIS keeps the row as CANCELLED                                                      |
+| `POST /appointments/:id/payment` `{version, status}`                          | PAID / UNPAID for one bill occurrence (user-reported); PAID suppresses its reminders                      |
+| `PUT /workspaces/:id/my-color` `{color}`                                      | Own identity colour in this workspace (palette token or null)                                             |
+| `GET /admin/overview`                                                         | Dashboard metrics with status `measured` / `unavailable` / `not-enabled` and a detail route               |
+| `GET /admin/activity?from&to&status&workspaceId`                              | Activity Center, server-redacted (owner only, at most 62 days)                                            |
+| `GET /admin/quota`, `/admin/friends`, `/admin/health`, `/admin/notifications` | Owner only; truthful unavailable or not-enabled states                                                    |
+| `GET /admin/workspaces/:id`                                                   | Shared workspace members, roles and colours (personal workspaces: 404)                                    |
+| `GET /admin/users?status=RESTRICTED&role&workspaceId`                         | New filters                                                                                               |
+| `POST /admin/users/:id/status` `{action, assignments}`                        | `assignments` only for `reactivate` (explicit review)                                                     |
+
+Summary and detail DTOs add `kind`, `bill`, `series`, `creator` (shared workspaces only),
+`recurrence` and `paidBy`. Sensitive writes (`/admin/users/:id/status`, `/role` and membership
+removal) need a LINE login within 15 minutes (`403 REAUTH_REQUIRED`). `/me.permissions` adds
+`platformOperations`. Admin audit hides metadata for every `appointment*` resource.

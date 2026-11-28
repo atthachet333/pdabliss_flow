@@ -9,6 +9,7 @@
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import {
   type Appointment as PAppointment,
+  type AppointmentSeries as PSeries,
   type AuditLog as PAuditLog,
   type Invitation as PInvitation,
   Prisma,
@@ -31,6 +32,9 @@ import {
   type LineIdentityRow,
   type MemberRow,
   type PreferenceRow,
+  type ReminderActivityRow,
+  type ReminderStatus,
+  type SeriesRow,
   type SessionRow,
   type Store,
   StoreConflictError,
@@ -84,14 +88,60 @@ function mapAppointment(a: PAppointment): AppointmentRow {
     updatedAt: a.updatedAt,
     cancelledAt: a.cancelledAt,
     cancelledByUserId: a.cancelledByUserId,
+    kind: a.kind,
+    seriesId: a.seriesId,
+    occurrenceDate: a.occurrenceDate ? fromDate(a.occurrenceDate) : null,
+    isException: a.isException,
+    // DECIMAL(14,2) → exact string; Decimal.toFixed never goes through binary floating point.
+    amount: a.amount === null ? null : a.amount.toFixed(2),
+    currency: a.currency,
+    paymentStatus: a.paymentStatus,
+    paidAt: a.paidAt,
+    paidByUserId: a.paidByUserId,
   };
 }
 
 function appointmentData(a: AppointmentRow) {
   return {
     ...a,
+    kind: a.kind ?? 'EVENT',
+    seriesId: a.seriesId ?? null,
+    occurrenceDate: a.occurrenceDate ? toDate(a.occurrenceDate) : null,
+    isException: a.isException ?? false,
+    amount: a.amount ?? null,
+    currency: a.currency ?? null,
+    paymentStatus: a.paymentStatus ?? null,
+    paidAt: a.paidAt ?? null,
+    paidByUserId: a.paidByUserId ?? null,
     startDate: toDate(a.startDate),
     endDate: toDate(a.endDate),
+  };
+}
+
+function mapSeries(r: PSeries): SeriesRow {
+  return {
+    ...r,
+    untilDate: r.untilDate ? fromDate(r.untilDate) : null,
+    startDate: fromDate(r.startDate),
+    generatedThrough: r.generatedThrough ? fromDate(r.generatedThrough) : null,
+    template: r.template ?? null,
+  };
+}
+
+function seriesData(r: Partial<SeriesRow>) {
+  const { untilDate, startDate, generatedThrough, template, ...rest } = r;
+  return {
+    ...rest,
+    ...(untilDate !== undefined ? { untilDate: untilDate ? toDate(untilDate) : null } : {}),
+    ...(startDate !== undefined ? { startDate: toDate(startDate) } : {}),
+    ...(generatedThrough !== undefined
+      ? { generatedThrough: generatedThrough ? toDate(generatedThrough) : null }
+      : {}),
+    ...(template !== undefined
+      ? {
+          template: template === null ? Prisma.DbNull : (template as Prisma.InputJsonValue),
+        }
+      : {}),
   };
 }
 
@@ -255,6 +305,8 @@ export class PrismaStore implements Store {
   }
   async listUsers(q: {
     statuses?: UserRow['status'][];
+    globalRoles?: UserRow['globalRole'][];
+    ids?: string[];
     text?: string;
     limit: number;
     offset?: number;
@@ -262,6 +314,8 @@ export class PrismaStore implements Store {
     return this.db.user.findMany({
       where: {
         ...(q.statuses ? { status: { in: q.statuses } } : {}),
+        ...(q.globalRoles ? { globalRole: { in: q.globalRoles } } : {}),
+        ...(q.ids ? { id: { in: q.ids } } : {}),
         ...(q.text ? { displayName: { contains: q.text } } : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
@@ -434,6 +488,17 @@ export class PrismaStore implements Store {
   async getPersonalWorkspace(userId: string) {
     return this.db.workspace.findUnique({ where: { personalOwnerId: userId } });
   }
+  async countWorkspaces(q: {
+    statuses?: WorkspaceRow['status'][];
+    kinds?: WorkspaceRow['kind'][];
+  }) {
+    return this.db.workspace.count({
+      where: {
+        ...(q.statuses ? { status: { in: q.statuses } } : {}),
+        ...(q.kinds ? { kind: { in: q.kinds } } : {}),
+      },
+    });
+  }
   async listWorkspaces(q: { ids?: string[]; statuses?: WorkspaceRow['status'][]; limit: number }) {
     return this.db.workspace.findMany({
       where: {
@@ -490,7 +555,7 @@ export class PrismaStore implements Store {
   async updateMember(
     workspaceId: string,
     userId: string,
-    patch: Partial<Pick<MemberRow, 'role' | 'status'>>,
+    patch: Partial<Pick<MemberRow, 'role' | 'status' | 'colorToken'>>,
     now: Date,
   ) {
     const n = await this.db.workspaceMember.updateMany({
@@ -634,6 +699,144 @@ export class PrismaStore implements Store {
   async appendAppointmentEvent(row: AppointmentEventRow) {
     await this.db.appointmentEvent.create({
       data: { ...row, fields: row.fields === null ? Prisma.DbNull : row.fields },
+    });
+  }
+  async createAppointments(bundles: AppointmentBundle[]) {
+    if (!bundles.length) return;
+    await guarded(
+      this.db.appointment.createMany({ data: bundles.map((b) => appointmentData(b.appointment)) }),
+    );
+    const grants = bundles.flatMap((b) => b.accessGrants);
+    const dests = bundles.flatMap((b) => b.destinations);
+    const rules = bundles.flatMap((b) => b.reminderRules);
+    if (grants.length) await guarded(this.db.appointmentAccess.createMany({ data: grants }));
+    if (dests.length) await guarded(this.db.appointmentDestination.createMany({ data: dests }));
+    if (rules.length) await guarded(this.db.reminderRule.createMany({ data: rules }));
+  }
+  async appendAppointmentEvents(rows: AppointmentEventRow[]) {
+    if (!rows.length) return;
+    await this.db.appointmentEvent.createMany({
+      data: rows.map((r) => ({ ...r, fields: r.fields === null ? Prisma.DbNull : r.fields })),
+    });
+  }
+  async deleteAppointments(ids: string[]) {
+    if (!ids.length) return 0;
+    // Children (grants, destinations, reminder rules, events) cascade with the row.
+    return (await this.db.appointment.deleteMany({ where: { id: { in: ids } } })).count;
+  }
+  async listSeriesOccurrences(seriesId: string, fromDate?: string) {
+    const rows = await this.db.appointment.findMany({
+      where: {
+        seriesId,
+        ...(fromDate ? { occurrenceDate: { gte: toDate(fromDate) } } : {}),
+      },
+      include: bundleInclude,
+      orderBy: [{ occurrenceDate: 'asc' }, { id: 'asc' }],
+    });
+    return rows.map(mapBundle);
+  }
+  async moveOccurrences(ids: string[], seriesId: string) {
+    if (!ids.length) return 0;
+    return (
+      await guarded(
+        this.db.appointment.updateMany({ where: { id: { in: ids } }, data: { seriesId } }),
+      )
+    ).count;
+  }
+
+  // ───────── recurring series
+  async createSeries(row: SeriesRow) {
+    await guarded(
+      this.db.appointmentSeries.create({
+        data: seriesData(row) as Prisma.AppointmentSeriesUncheckedCreateInput,
+      }),
+    );
+  }
+  async getSeries(id: string) {
+    const r = await this.db.appointmentSeries.findUnique({ where: { id } });
+    return r ? mapSeries(r) : null;
+  }
+  async updateSeries(
+    id: string,
+    expectedVersion: number,
+    patch: Partial<
+      Omit<SeriesRow, 'id' | 'version' | 'createdAt' | 'createdByUserId' | 'workspaceId'>
+    >,
+    now: Date,
+  ) {
+    const n = await this.db.appointmentSeries.updateMany({
+      where: { id, version: expectedVersion },
+      data: {
+        ...(seriesData(patch) as Prisma.AppointmentSeriesUncheckedUpdateManyInput),
+        updatedAt: now,
+        version: { increment: 1 },
+      },
+    });
+    return n.count === 1 ? this.getSeries(id) : null;
+  }
+  async listSeriesNeedingExtension(before: string, limit: number) {
+    const rows = await this.db.appointmentSeries.findMany({
+      where: {
+        status: 'ACTIVE',
+        OR: [{ generatedThrough: null }, { generatedThrough: { lt: toDate(before) } }],
+      },
+      orderBy: [{ generatedThrough: 'asc' }, { id: 'asc' }],
+      take: limit,
+    });
+    return rows.map(mapSeries);
+  }
+
+  // ───────── operations
+  async listReminderActivity(q: {
+    fireFrom: Date;
+    fireTo: Date;
+    statuses?: ReminderStatus[];
+    workspaceIds?: string[];
+    limit: number;
+    offset?: number;
+  }): Promise<ReminderActivityRow[]> {
+    const rows = await this.db.reminderRule.findMany({
+      where: {
+        fireAt: { gte: q.fireFrom, lte: q.fireTo },
+        ...(q.statuses ? { status: { in: q.statuses } } : {}),
+        ...(q.workspaceIds ? { appointment: { workspaceId: { in: q.workspaceIds } } } : {}),
+      },
+      include: { appointment: { include: bundleInclude } },
+      orderBy: [{ fireAt: 'asc' }, { id: 'asc' }],
+      take: q.limit,
+      skip: q.offset ?? 0,
+    });
+    return rows.map(({ appointment, ...rule }) => ({ rule, bundle: mapBundle(appointment) }));
+  }
+  async countReminderRules(q: { statuses?: ReminderStatus[]; fireFrom?: Date; fireTo?: Date }) {
+    const fire =
+      q.fireFrom || q.fireTo
+        ? {
+            fireAt: {
+              ...(q.fireFrom ? { gte: q.fireFrom } : {}),
+              ...(q.fireTo ? { lte: q.fireTo } : {}),
+            },
+          }
+        : {};
+    const rows = await this.db.reminderRule.groupBy({
+      by: ['status'],
+      where: { ...(q.statuses ? { status: { in: q.statuses } } : {}), ...fire },
+      _count: { _all: true },
+    });
+    const out: Partial<Record<ReminderStatus, number>> = {};
+    for (const r of rows) out[r.status] = r._count._all;
+    return out;
+  }
+  async countAudit(q: { since: Date }) {
+    return this.db.auditLog.count({ where: { createdAt: { gte: q.since } } });
+  }
+  async listIdentities(userIds: string[]) {
+    if (!userIds.length) return [];
+    return this.db.lineIdentity.findMany({ where: { userId: { in: userIds } } });
+  }
+  async countOpenSessions(userId: string, now: Date) {
+    return this.db.session.count({
+      where: { userId, endedAt: null, absoluteExpiresAt: { gt: now } },
     });
   }
   async listAppointmentEvents(appointmentId: string, limit: number) {

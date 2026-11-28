@@ -30,6 +30,7 @@ import { LegalPage } from './pages/Legal';
 import { InvitePage } from './pages/Invite';
 
 const OwnerConsole = lazy(() => import('./pages/owner/OwnerConsole'));
+const AdminCenter = lazy(() => import('./admin/AdminCenter'));
 
 const WS_KEY = 'flow.activeWorkspace';
 function readWs(): string | 'all' {
@@ -77,11 +78,13 @@ export function FlowApplication({
   client,
   onLogout,
   onAccountChanged,
+  onReauthenticate,
 }: {
   client: FlowApiClient;
   onLogout: () => void;
   /** The server says this account can no longer use the app (suspended, revoked…). */
   onAccountChanged: () => void;
+  onReauthenticate: () => Promise<'ok' | 'redirecting' | 'unavailable'>;
 }) {
   const api = useMemo(() => new FlowApp(client), [client]);
   const [me, setMe] = useState<MeDto | null>(null);
@@ -150,7 +153,26 @@ export function FlowApplication({
     setWorkspaceId,
     logout: onLogout,
     toast: toasts.push,
+    reauthenticate: onReauthenticate,
   };
+
+  // Desktop-first Platform Administration Center: same origin, API, session and database,
+  // separate layout (no mobile tab bar). The server authorizes every request it makes.
+  if (location.pathname === '/admin' || location.pathname.startsWith('/admin/'))
+    return (
+      <AppProvider value={ctx}>
+        <Suspense
+          fallback={
+            <div className="app app--loading" aria-busy="true">
+              <Skeleton height={200} radius={20} />
+            </div>
+          }
+        >
+          {me.permissions.ownerConsole ? <AdminCenter /> : <Navigate to="/today" replace />}
+        </Suspense>
+        <Toasts items={toasts.items} />
+      </AppProvider>
+    );
 
   return (
     <AppProvider value={ctx}>

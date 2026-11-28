@@ -13,15 +13,23 @@ import {
   CALENDAR_PRESETS,
   calculateReminders,
   CATEGORY_IDS,
+  defaultAppointmentStart,
+  describeRecurrenceThai,
+  expandRecurrence,
+  isPastLocalStart,
   MAX_REMINDER_RULES,
+  normalizeAmount,
   RELATIVE_PRESETS,
   reminderLabelTh,
+  formatThaiLocalDate,
   toLocalTimeString,
   type AppointmentDetailDto,
   type AppointmentInputDraft,
   type CategoryId,
   type DestinationOptionDto,
+  type RecurrenceRule,
   type ReminderRuleDto,
+  type SeriesScope,
 } from '@flow/shared';
 import { FlexBubble } from '../../components/FlexBubble';
 import { Bell, Eye, Lock, Plus, TriangleAlert, Users, X } from '../../components/icons';
@@ -43,7 +51,8 @@ import {
   useLoad,
   VISIBILITY_TEXT,
 } from '../core';
-import { Field, Loaded, Page, Segmented } from '../ui';
+import { fireText, ScopeChooser } from '../extras';
+import { Confirm, Field, Loaded, Page, Segmented } from '../ui';
 
 type Visibility = 'PRIVATE' | 'WORKSPACE' | 'SELECTED';
 type Policy = 'FULL' | 'PRIVACY_SAFE';
@@ -66,9 +75,41 @@ interface Draft {
   destinations: { destinationId: string; contentPolicy: Policy }[];
   confirmSensitive: boolean;
   reminders: ReminderRuleDto[];
+  kind: 'EVENT' | 'BILL';
+  amount: string;
+  repeat: 'NONE' | RecurrenceRule['frequency'];
+  interval: number;
+  monthDayMode: 'START' | 'LAST' | 'DAY';
+  monthDay: number;
+  missingDay: 'LAST_DAY' | 'SKIP';
+  endType: 'NEVER' | 'UNTIL' | 'COUNT';
+  until: string;
+  count: number;
 }
 
-function toInput(d: Draft): AppointmentInputDraft {
+function ruleOf(d: Draft): RecurrenceRule | null {
+  if (d.repeat === 'NONE') return null;
+  return {
+    frequency: d.repeat,
+    interval: Math.max(1, Math.min(99, Math.round(d.interval) || 1)),
+    monthDay:
+      d.repeat !== 'MONTHLY' || d.monthDayMode === 'START'
+        ? null
+        : d.monthDayMode === 'LAST'
+          ? 'LAST'
+          : Math.max(1, Math.min(31, Math.round(d.monthDay) || 1)),
+    missingDay: d.missingDay,
+    end:
+      d.endType === 'UNTIL' && d.until
+        ? { type: 'UNTIL', until: d.until }
+        : d.endType === 'COUNT'
+          ? { type: 'COUNT', count: Math.max(1, Math.min(500, Math.round(d.count) || 1)) }
+          : { type: 'NEVER' },
+  };
+}
+
+function toInput(d: Draft, withRecurrence = true): AppointmentInputDraft {
+  const amount = d.amount.trim() ? normalizeAmount(d.amount) : null;
   return {
     workspaceId: d.workspaceId,
     title: d.title,
@@ -86,10 +127,27 @@ function toInput(d: Draft): AppointmentInputDraft {
     destinations: d.destinations,
     confirmSensitive: d.confirmSensitive,
     reminders: d.reminders,
+    kind: d.kind,
+    ...(d.kind === 'BILL'
+      ? { bill: { amount: amount ?? (d.amount.trim() || null), currency: 'THB' } }
+      : {}),
+    ...(withRecurrence && ruleOf(d) ? { recurrence: ruleOf(d) } : {}),
   };
 }
 
+const RECURRENCE_DEFAULTS = {
+  repeat: 'NONE',
+  interval: 1,
+  monthDayMode: 'START',
+  monthDay: 1,
+  missingDay: 'LAST_DAY',
+  endType: 'NEVER',
+  until: '',
+  count: 12,
+} as const;
+
 function fromDetail(a: AppointmentDetailDto): Draft {
+  const r = a.recurrence?.rule;
   return {
     workspaceId: a.workspaceId,
     title: a.title,
@@ -118,6 +176,21 @@ function fromDetail(a: AppointmentDetailDto): Draft {
             enabled: r.enabled,
           },
     ),
+    kind: a.kind,
+    amount: a.bill?.amount ?? '',
+    ...RECURRENCE_DEFAULTS,
+    ...(r
+      ? {
+          repeat: r.frequency,
+          interval: r.interval,
+          monthDayMode: r.monthDay === null ? 'START' : r.monthDay === 'LAST' ? 'LAST' : 'DAY',
+          monthDay: typeof r.monthDay === 'number' ? r.monthDay : 1,
+          missingDay: r.missingDay,
+          endType: r.end.type,
+          until: r.end.type === 'UNTIL' ? r.end.until : '',
+          count: r.end.type === 'COUNT' ? r.end.count : 12,
+        }
+      : {}),
   };
 }
 
@@ -141,6 +214,7 @@ export function AppointmentFormPage({ mode }: { mode: 'create' | 'edit' }) {
               initial={initial.draft}
               version={initial.version}
               creator={initial.creator}
+              recurring={initial.recurring}
             />
           )}
         </Loaded>
@@ -162,20 +236,32 @@ function useLoad2(
     async () => {
       if (mode === 'edit' && id) {
         const a = await api.appointment(id);
-        return { draft: fromDetail(a), version: a.version, creator: a.mine };
+        return {
+          draft: fromDetail(a),
+          version: a.version,
+          creator: a.mine,
+          recurring: a.series !== null,
+        };
       }
       const prefs = me.preferences;
       const writable = me.workspaces.filter((w) => w.role !== 'VIEWER');
       const ws =
         writable.find((w) => w.id === prefs.defaultWorkspaceId)?.id ?? writable[0]?.id ?? '';
+      // RD03: never default to a start time that has already passed (see form-defaults.ts).
+      const start = defaultAppointmentStart(
+        new Date(),
+        TZ,
+        date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayLocal(),
+      );
+      const kind = params.get('kind') === 'bill' ? ('BILL' as const) : ('EVENT' as const);
       const base: Draft = {
         workspaceId: ws,
         title: '',
         category: 'personal',
-        allDay: false,
-        date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayLocal(),
+        allDay: kind === 'BILL',
+        date: start.date,
         endDate: '',
-        startTime: '09:00',
+        startTime: start.startTime,
         endTime: '',
         location: '',
         notes: '',
@@ -184,6 +270,10 @@ function useLoad2(
         destinations: [],
         confirmSensitive: false,
         reminders: prefs.defaultReminders,
+        kind,
+        amount: '',
+        ...RECURRENCE_DEFAULTS,
+        ...(kind === 'BILL' ? { repeat: 'MONTHLY' as const } : {}),
       };
       if (from) {
         const dup = await api.duplicateDraft(from);
@@ -204,14 +294,18 @@ function useLoad2(
             location: dup.location ?? '',
             notes: dup.notes ?? '',
             reminders: (dup.reminders as ReminderRuleDto[] | undefined) ?? base.reminders,
+            kind: dup.kind ?? 'EVENT',
+            amount: dup.bill?.amount ?? '',
+            repeat: 'NONE' as const,
           },
           version: 0,
           creator: true,
+          recurring: false,
         };
       }
-      return { draft: base, version: 0, creator: true };
+      return { draft: base, version: 0, creator: true, recurring: false };
     },
-    `${mode}|${id ?? ''}|${from ?? ''}`,
+    `${mode}|${id ?? ''}|${from ?? ''}|${params.get('kind') ?? ''}`,
   );
 }
 
@@ -221,6 +315,7 @@ function Form({
   initial,
   version,
   creator,
+  recurring,
 }: {
   mode: 'create' | 'edit';
   id: string | null;
@@ -228,6 +323,8 @@ function Form({
   version: number;
   /** Only the creator may change who can see an appointment (server rule). */
   creator: boolean;
+  /** Editing an occurrence of a recurring series (asks for the scope before saving). */
+  recurring: boolean;
 }) {
   const { api, me, toast } = useApp();
   const navigate = useNavigate();
@@ -241,6 +338,8 @@ function Form({
   } | null>(null);
   const [estimate, setEstimate] = useState<EstimateDto | null>(null);
   const [run, saving, saveError] = useAction();
+  const [askScope, setAskScope] = useState(false);
+  const [scope, setScope] = useState<SeriesScope>('THIS');
   const key = useRef(newIdempotencyKey());
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((x) => ({ ...x, [k]: v }));
 
@@ -283,10 +382,17 @@ function Form({
   // Estimate (debounced) — local calculation by the server, never LINE-reported numbers.
   useEffect(() => {
     if (!d.title.trim() || !d.workspaceId) return;
+    // Aborted on change or unmount, so no estimate request outlives the form (e.g. after Save).
+    const ctl = new AbortController();
     const t = setTimeout(() => {
-      api.estimate(toInput(d)).then(setEstimate, () => setEstimate(null));
+      api.estimate(toInput(d), ctl.signal).then(setEstimate, () => {
+        if (!ctl.signal.aborted) setEstimate(null);
+      });
     }, 500);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      ctl.abort();
+    };
   }, [api, d]);
 
   const writable = me.workspaces.filter((w) => w.role !== 'VIEWER');
@@ -313,16 +419,34 @@ function Form({
     );
   };
 
-  const submit = async () => {
-    const input = toInput(d);
+  const rule = ruleOf(d);
+  const nextDates = useMemo(() => {
+    if (!rule) return [];
+    try {
+      return expandRecurrence(rule, d.date, { from: d.date, to: '2100-12-31', max: 4 }).map(
+        (o) => o.date,
+      );
+    } catch {
+      return [];
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(rule), d.date]);
+  const pastStart =
+    !d.allDay && d.startTime && isPastLocalStart(new Date(), TZ, d.date, d.startTime);
+  const amountInvalid =
+    d.kind === 'BILL' && d.amount.trim() !== '' && normalizeAmount(d.amount) === null;
+
+  const submit = async (chosen: SeriesScope = 'THIS') => {
+    const input = toInput(d, mode === 'create' || chosen !== 'THIS');
     const r = await run(() =>
       mode === 'create'
         ? api.createAppointment(input, key.current)
-        : api.updateAppointment(id as string, version, input),
+        : api.updateAppointment(id as string, version, input, recurring ? chosen : 'THIS'),
     );
     if (!r) return;
+    setAskScope(false);
     key.current = newIdempotencyKey();
-    toast(mode === 'create' ? 'บันทึกนัดหมายแล้วค่ะ' : 'บันทึกการแก้ไขแล้วค่ะ');
+    toast(mode === 'create' ? 'บันทึกแล้วค่ะ' : 'บันทึกการแก้ไขแล้วค่ะ');
     navigate(`/appointments/${r.appointment.id}`, { replace: true });
   };
 
@@ -341,7 +465,8 @@ function Form({
       className="form"
       onSubmit={(e) => {
         e.preventDefault();
-        void submit();
+        if (mode === 'edit' && recurring) setAskScope(true);
+        else void submit();
       }}
       noValidate
     >
@@ -374,9 +499,32 @@ function Form({
         </select>
       </Field>
 
+      {mode === 'create' ? (
+        <fieldset className="fs">
+          <legend className="f-label">ประเภท</legend>
+          <Segmented<'EVENT' | 'BILL'>
+            label="ประเภท"
+            value={d.kind}
+            onChange={(k) =>
+              setD((x) => ({
+                ...x,
+                kind: k,
+                ...(k === 'BILL' && x.repeat === 'NONE'
+                  ? { repeat: 'MONTHLY' as const, allDay: true }
+                  : {}),
+              }))
+            }
+            options={[
+              { value: 'EVENT', label: 'นัดหมาย' },
+              { value: 'BILL', label: 'บิล / ค่าใช้จ่าย' },
+            ]}
+          />
+        </fieldset>
+      ) : null}
+
       <Field
-        label="ชื่อนัดหมาย"
-        error={code === 'VALIDATION_ERROR' && !d.title.trim() ? 'กรุณาใส่ชื่อนัดหมาย' : null}
+        label={d.kind === 'BILL' ? 'ชื่อบิล' : 'ชื่อนัดหมาย'}
+        error={code === 'VALIDATION_ERROR' && !d.title.trim() ? 'กรุณาใส่ชื่อ' : null}
       >
         <input
           className="f-input f-input--title"
@@ -384,9 +532,30 @@ function Form({
           maxLength={120}
           required
           onChange={(e) => set('title', e.target.value)}
-          placeholder="เช่น ไปหาหมอฟัน, ประชุมทีม"
+          placeholder={
+            d.kind === 'BILL' ? 'เช่น ค่าไฟฟ้า, ค่าอินเทอร์เน็ต, ค่างวดรถ' : 'เช่น ไปหาหมอฟัน, ประชุมทีม'
+          }
         />
       </Field>
+
+      {d.kind === 'BILL' ? (
+        <Field
+          label="จำนวนเงิน (บาท, ไม่บังคับ)"
+          hint="บิลที่ยอดไม่เท่ากันทุกเดือน แก้ยอดเฉพาะครั้งได้ภายหลัง · สถานะชำระเป็นข้อมูลที่ผู้ใช้แจ้งเอง"
+          error={amountInvalid ? 'จำนวนเงินไม่ถูกต้อง (ทศนิยมได้ 2 ตำแหน่ง)' : null}
+        >
+          <input
+            className="f-input f-num"
+            inputMode="decimal"
+            autoComplete="off"
+            value={d.amount}
+            maxLength={18}
+            aria-invalid={amountInvalid}
+            onChange={(e) => set('amount', e.target.value)}
+            placeholder="เช่น 1,250.50"
+          />
+        </Field>
+      ) : null}
 
       <fieldset className="fs">
         <legend className="f-label">หมวด</legend>
@@ -405,9 +574,14 @@ function Form({
         </div>
       </fieldset>
 
-      <Switch checked={d.allDay} onChange={(v) => set('allDay', v)} label="ทั้งวัน" />
-      <div className="grid-2">
-        <Field label="วันที่">
+      <Switch
+        checked={d.allDay}
+        onChange={(v) => set('allDay', v)}
+        label={d.kind === 'BILL' ? 'ไม่ระบุเวลา (ครบกำหนดทั้งวัน)' : 'ทั้งวัน'}
+      />
+      {/* RD01: date on its own row, times share the next row; every cell may shrink. */}
+      <div className={`dt-grid${d.allDay ? ' dt-grid--allday' : ''}`}>
+        <Field label={d.kind === 'BILL' ? 'วันครบกำหนด' : 'วันที่'}>
           <input
             className="f-input"
             type="date"
@@ -448,6 +622,133 @@ function Form({
           </>
         )}
       </div>
+      {pastStart ? (
+        <Notice tone="caution">
+          เวลานี้ผ่านไปแล้ว — บันทึกย้อนหลังได้ แต่จะไม่มีการแจ้งเตือนสำหรับเวลาที่ผ่านไปแล้ว
+        </Notice>
+      ) : null}
+
+      <fieldset className="fs">
+        <legend className="f-label">ทำซ้ำ</legend>
+        {mode === 'edit' && !recurring ? (
+          <p className="f-hint">
+            นัดหมายครั้งเดียวเปลี่ยนเป็นแบบทำซ้ำไม่ได้ — ใช้ “ทำซ้ำ” ในหน้ารายละเอียดเพื่อสร้างรายการใหม่
+          </p>
+        ) : (
+          <>
+            <select
+              className="f-select"
+              aria-label="ความถี่"
+              value={d.repeat}
+              onChange={(e) => set('repeat', e.target.value as Draft['repeat'])}
+            >
+              {mode === 'create' ? <option value="NONE">ครั้งเดียว</option> : null}
+              <option value="DAILY">ทุกวัน</option>
+              <option value="WEEKLY">ทุกสัปดาห์</option>
+              <option value="MONTHLY">ทุกเดือน</option>
+              <option value="YEARLY">ทุกปี</option>
+            </select>
+            {rule ? (
+              <div className="repeat">
+                <label className="repeat__row">
+                  <span>ทุก</span>
+                  <input
+                    className="f-input repeat__num f-num"
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={d.interval}
+                    onChange={(e) => set('interval', Number(e.target.value))}
+                    aria-label="ทุกกี่รอบ"
+                  />
+                  <span>
+                    {{ DAILY: 'วัน', WEEKLY: 'สัปดาห์', MONTHLY: 'เดือน', YEARLY: 'ปี' }[rule.frequency]}
+                  </span>
+                </label>
+                {rule.frequency === 'MONTHLY' ? (
+                  <>
+                    <Segmented<Draft['monthDayMode']>
+                      label="วันในเดือน"
+                      value={d.monthDayMode}
+                      onChange={(v) => set('monthDayMode', v)}
+                      options={[
+                        { value: 'START', label: `วันที่ ${Number(d.date.slice(8))}` },
+                        { value: 'DAY', label: 'เลือกวันที่' },
+                        { value: 'LAST', label: 'วันสุดท้ายของเดือน' },
+                      ]}
+                    />
+                    {d.monthDayMode === 'DAY' ? (
+                      <input
+                        className="f-input repeat__num f-num"
+                        type="number"
+                        min={1}
+                        max={31}
+                        aria-label="วันที่ของเดือน"
+                        value={d.monthDay}
+                        onChange={(e) => set('monthDay', Number(e.target.value))}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+                {(rule.frequency === 'MONTHLY' &&
+                  ((d.monthDayMode === 'DAY' && d.monthDay > 28) ||
+                    (d.monthDayMode === 'START' && Number(d.date.slice(8)) > 28))) ||
+                (rule.frequency === 'YEARLY' && d.date.slice(5) === '02-29') ? (
+                  <Segmented<Draft['missingDay']>
+                    label="เดือนหรือปีที่ไม่มีวันนี้"
+                    value={d.missingDay}
+                    onChange={(v) => set('missingDay', v)}
+                    options={[
+                      { value: 'LAST_DAY', label: 'ใช้วันสุดท้ายแทน' },
+                      { value: 'SKIP', label: 'ข้ามครั้งนั้น' },
+                    ]}
+                  />
+                ) : null}
+                <Segmented<Draft['endType']>
+                  label="สิ้นสุด"
+                  value={d.endType}
+                  onChange={(v) => set('endType', v)}
+                  options={[
+                    { value: 'NEVER', label: 'ไม่กำหนด' },
+                    { value: 'UNTIL', label: 'ถึงวันที่' },
+                    { value: 'COUNT', label: 'จำนวนครั้ง' },
+                  ]}
+                />
+                {d.endType === 'UNTIL' ? (
+                  <input
+                    className="f-input"
+                    type="date"
+                    aria-label="สิ้นสุดวันที่"
+                    min={d.date}
+                    value={d.until}
+                    onChange={(e) => set('until', e.target.value)}
+                  />
+                ) : null}
+                {d.endType === 'COUNT' ? (
+                  <input
+                    className="f-input repeat__num f-num"
+                    type="number"
+                    min={1}
+                    max={500}
+                    aria-label="จำนวนครั้ง"
+                    value={d.count}
+                    onChange={(e) => set('count', Number(e.target.value))}
+                  />
+                ) : null}
+                <p className="f-hint">
+                  {describeRecurrenceThai(rule, d.date)}
+                  {nextDates.length
+                    ? ` · ครั้งถัดไป: ${nextDates.map((x) => formatThaiLocalDate(x).short).join(', ')}`
+                    : ' · ไม่มีครั้งที่ตรงเงื่อนไข'}
+                </p>
+                <p className="f-hint">
+                  FLOW สร้างรายการล่วงหน้าเป็นช่วง ๆ (เช่น 90 วันสำหรับทุกวัน, 2 ปีสำหรับทุกเดือน) และต่อให้อัตโนมัติ
+                </p>
+              </div>
+            ) : null}
+          </>
+        )}
+      </fieldset>
 
       <Field label="สถานที่ (ไม่บังคับ)">
         <input
@@ -641,7 +942,9 @@ function Form({
           {preview.error ? <Notice tone="caution">{preview.error}</Notice> : null}
           {preview.data ? (
             <>
-              <p className="f-hint f-num">จะแจ้งเตือนเวลา {preview.data.fireAtLocal} น.</p>
+              <p className="f-hint f-num">
+                เวลาแจ้งเตือนที่คำนวณไว้: {preview.data.fireAtLocal} · ตัวอย่างเท่านั้น ไม่มีการส่ง
+              </p>
               <FlexBubble model={preview.data.model} />
               {preview.data.issues.length ? (
                 <Notice tone="caution">
@@ -677,11 +980,39 @@ function Form({
           size="lg"
           block
           busy={saving}
-          disabled={!d.title.trim() || !d.workspaceId || (calc !== null && !calc.valid)}
+          disabled={
+            !d.title.trim() ||
+            !d.workspaceId ||
+            amountInvalid ||
+            (calc !== null && !calc.valid) ||
+            (rule !== null && nextDates.length === 0)
+          }
         >
-          {mode === 'create' ? 'บันทึกนัดหมาย' : 'บันทึกการแก้ไข'}
+          {mode === 'create' ? 'บันทึก' : 'บันทึกการแก้ไข'}
         </Button>
       </div>
+      <Confirm
+        open={askScope}
+        title="บันทึกการแก้ไขรายการทำซ้ำ"
+        confirmLabel="บันทึก"
+        busy={saving}
+        error={saveError ? errorText(saveError) : null}
+        onClose={() => setAskScope(false)}
+        onConfirm={() => void submit(scope)}
+      >
+        <ScopeChooser
+          value={scope}
+          onChange={setScope}
+          verb="แก้ไข"
+          extra={
+            scope === 'THIS' ? (
+              <p className="f-hint">
+                การเปลี่ยนรูปแบบการทำซ้ำมีผลเฉพาะเมื่อเลือก “ครั้งนี้และครั้งถัดไป” หรือ “ทุกครั้ง”
+              </p>
+            ) : null
+          }
+        />
+      </Confirm>
     </form>
   );
 }
@@ -704,9 +1035,10 @@ function ReminderEditor({
     onChange([...rules, r]);
     setAdding(false);
   };
+  // RD06: calculated times only — the label never implies a message is queued for delivery.
   const STATUS: Record<string, string> = {
-    SCHEDULED: '',
-    PAST: 'เลยเวลาแล้ว',
+    SCHEDULED: 'คำนวณแล้ว',
+    PAST: 'เวลาผ่านไปแล้ว · จะไม่ส่ง',
     DISABLED: 'ปิดอยู่',
     DUPLICATE: 'ซ้ำกับรายการอื่น',
     CANCELLED: 'ยกเลิก',
@@ -724,9 +1056,7 @@ function ReminderEditor({
       <ul className="rem__list">
         {rules.map((r, i) => {
           const c = calc?.reminders[i];
-          const when = c?.fireAt
-            ? `${c.fireAt.toLocaleDateString('th-TH', { timeZone: TZ, day: 'numeric', month: 'short' })} ${toLocalTimeString(c.fireAt, TZ)} น.`
-            : '';
+          const when = c?.fireAt ? fireText(c.fireAt.toISOString()) : '';
           const note = c?.issue ? ISSUE[c.issue] : c ? STATUS[c.status] : '';
           return (
             <li

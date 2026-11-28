@@ -43,7 +43,12 @@ export const CALENDAR_PRESETS = [
 ] as const;
 
 export type ReminderRuleKind = 'RELATIVE' | 'CALENDAR';
-export type ReminderRuleStatus = 'SCHEDULED' | 'PAST' | 'DISABLED' | 'DUPLICATE' | 'CANCELLED';
+/**
+ * SUPPRESSED is never produced by `calculateReminders`: the API applies it to a bill
+ * occurrence marked paid (user-reported), so EP03 must not deliver that reminder.
+ */
+export type ReminderRuleStatus =
+  'SCHEDULED' | 'PAST' | 'DISABLED' | 'DUPLICATE' | 'CANCELLED' | 'SUPPRESSED';
 export type ReminderRuleIssue =
   'invalid-offset' | 'invalid-day-offset' | 'invalid-time' | 'after-start' | 'too-many';
 

@@ -33,6 +33,8 @@ export interface AppCtx {
   setWorkspaceId: (id: string | 'all') => void;
   logout: () => void;
   toast: (text: string, tone?: 'success' | 'info' | 'caution') => void;
+  /** Fresh LINE verification for sensitive administration (REAUTH_REQUIRED). */
+  reauthenticate: () => Promise<'ok' | 'redirecting' | 'unavailable'>;
 }
 
 const Ctx = createContext<AppCtx | null>(null);
@@ -147,6 +149,15 @@ const CODE_TEXT: Record<string, string> = {
   INVITATION_INVALID: 'ลิงก์เชิญไม่ถูกต้อง',
   INVITATION_EXPIRED: 'ลิงก์เชิญนี้หมดอายุแล้ว',
   APPOINTMENT_CANCELLED: 'นัดหมายนี้ถูกยกเลิกแล้ว แก้ไขไม่ได้',
+  REAUTH_REQUIRED: 'การดำเนินการนี้ต้องยืนยันตัวตนกับ LINE อีกครั้ง',
+  INVALID_COLOR: 'เลือกสีจากชุดสีที่กำหนดเท่านั้น',
+  NOT_A_BILL: 'รายการนี้ไม่ใช่บิล',
+  KIND_IMMUTABLE: 'เปลี่ยนประเภทรายการหลังบันทึกไม่ได้',
+  RECURRENCE_CREATE_ONLY: 'นัดหมายครั้งเดียวเปลี่ยนเป็นแบบทำซ้ำไม่ได้ — สร้างรายการใหม่แทน',
+  RECURRENCE_EMPTY: 'รูปแบบการทำซ้ำนี้ไม่มีวันที่ตรงเงื่อนไข',
+  RANGE_TOO_LARGE: 'ช่วงวันที่กว้างเกินไป (สูงสุด 62 วัน)',
+  ASSIGNMENTS_ONLY_ON_REACTIVATE: 'กำหนดกลุ่มได้เฉพาะตอนเปิดใช้งานบัญชีอีกครั้ง',
+  SERIES_MISSING: 'ไม่พบรายการทำซ้ำนี้แล้ว กรุณาโหลดใหม่',
 };
 
 /** Thai, user-safe message for any failure (never a raw server body). */

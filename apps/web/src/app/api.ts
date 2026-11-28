@@ -4,6 +4,14 @@
  * offline: a network failure surfaces as an error the user can retry explicitly.
  */
 import type {
+  ActivityDto,
+  AdminOverviewDto,
+  FriendsDto,
+  HealthDto,
+  MemberColorId,
+  NotificationOverviewDto,
+  QuotaDto,
+  SeriesScope,
   AppointmentDetailDto,
   AppointmentInputDraft,
   AppointmentSummaryDto,
@@ -55,7 +63,14 @@ export interface WorkspaceDetailDto {
     leave: boolean;
     createAppointments: boolean;
   };
-  members: { userId: string; displayName: string; role: Role; me: boolean }[];
+  members: {
+    userId: string;
+    displayName: string;
+    role: Role;
+    me: boolean;
+    color: MemberColorId;
+    customColor: boolean;
+  }[];
   destinations: { id: string; label: string; status: string; audienceSize: number | null }[];
 }
 
@@ -94,6 +109,8 @@ export interface AccessRequestDto {
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
   message: string | null;
   createdAt: string;
+  decidedAt?: string | null;
+  maskedLineId?: string | null;
   user: AdminUserDto | null;
   viaInvitation: boolean;
   target: { workspaceId: string; workspaceName: string; role: Role | null } | null;
@@ -101,6 +118,9 @@ export interface AccessRequestDto {
 
 export interface AdminUserDetailDto {
   user: AdminUserDto;
+  maskedLineId?: string | null;
+  openSessions?: number;
+  statusChangedAt?: string | null;
   can: { administer: boolean; changeRole: boolean };
   memberships: { workspaceId: string; workspaceName: string; kind: WorkspaceKindDto; role: Role }[];
   history: { action: string; at: string; meta: Record<string, unknown> | null }[];
@@ -135,6 +155,36 @@ export interface AuditDto {
   actor: string;
   at: string;
   meta: Record<string, unknown> | null;
+}
+
+export interface AdminWorkspaceDto {
+  id: string;
+  name: string;
+  kind: WorkspaceKindDto;
+  memberCount: number;
+  roles?: Record<Role, number>;
+  createdAt?: string;
+}
+
+export interface AdminWorkspaceDetailDto {
+  workspace: {
+    id: string;
+    name: string;
+    kind: WorkspaceKindDto;
+    status: string;
+    createdAt: string;
+  };
+  members: {
+    userId: string;
+    displayName: string;
+    status: AdminUserDto['status'];
+    globalRole: AdminUserDto['globalRole'];
+    role: Role;
+    color: MemberColorId;
+    since: string;
+  }[];
+  groups: { id: string; label: string; status: string; audienceSize: number | null }[];
+  invitations: { active: number; total: number };
 }
 
 export interface AdminSummaryDto {
@@ -249,23 +299,42 @@ export class FlowApp {
       body: input,
       idempotencyKey,
     });
-  updateAppointment = (id: string, version: number, input: AppointmentInputDraft) =>
+  updateAppointment = (
+    id: string,
+    version: number,
+    input: AppointmentInputDraft,
+    scope: SeriesScope = 'THIS',
+  ) =>
     this.c.request<{ appointment: AppointmentDetailDto }>(`/appointments/${enc(id)}`, {
       method: 'PUT',
-      body: { version, appointment: input },
+      body: { version, appointment: input, scope },
     });
-  cancelAppointment = (id: string, version: number) =>
-    this.c.request<{ appointment: AppointmentDetailDto }>(`/appointments/${enc(id)}/cancel`, {
+  cancelAppointment = (id: string, version: number, scope: SeriesScope = 'THIS') =>
+    this.c.request<{ appointment: AppointmentDetailDto | null }>(
+      `/appointments/${enc(id)}/cancel`,
+      { method: 'POST', body: { version, scope } },
+    );
+  setPayment = (id: string, version: number, status: 'PAID' | 'UNPAID') =>
+    this.c.request<{ appointment: AppointmentDetailDto }>(`/appointments/${enc(id)}/payment`, {
       method: 'POST',
-      body: { version },
+      body: { version, status },
     });
+  setMyColor = (workspaceId: string, color: MemberColorId | null) =>
+    this.c.request<{ color: MemberColorId; customColor: boolean }>(
+      `/workspaces/${enc(workspaceId)}/my-color`,
+      { method: 'PUT', body: { color } },
+    );
   preview = (appointment: AppointmentInputDraft, ruleIndex: number, destinationId: string | null) =>
     this.c.request<PreviewDto>('/preview/reminder', {
       method: 'POST',
       body: { appointment, ruleIndex, destinationId },
     });
-  estimate = (appointment: AppointmentInputDraft) =>
-    this.c.request<EstimateDto>('/preview/estimate', { method: 'POST', body: { appointment } });
+  estimate = (appointment: AppointmentInputDraft, signal?: AbortSignal) =>
+    this.c.request<EstimateDto>('/preview/estimate', {
+      method: 'POST',
+      body: { appointment },
+      ...(signal ? { signal } : {}),
+    });
 
   // owner console
   adminSummary = () => this.c.request<AdminSummaryDto>('/admin/summary');
@@ -278,8 +347,29 @@ export class FlowApp {
     });
   rejectRequest = (id: string) =>
     this.c.request(`/admin/access-requests/${enc(id)}/reject`, { method: 'POST', body: {} });
-  users = (p: { status?: string; q?: string; offset?: number } = {}) =>
-    this.c.request<PageDto<AdminUserDto>>(`/admin/users${qs({ ...p, limit: 30 })}`);
+  adminOverview = () => this.c.request<AdminOverviewDto>('/admin/overview');
+  activity = (p: {
+    from: string;
+    to: string;
+    status?: string;
+    workspaceId?: string;
+    offset?: number;
+  }) => this.c.request<ActivityDto>(`/admin/activity${qs({ ...p, limit: 50 })}`);
+  quota = () => this.c.request<QuotaDto>('/admin/quota');
+  friends = (p: { q?: string; status?: string; offset?: number } = {}) =>
+    this.c.request<FriendsDto>(`/admin/friends${qs({ ...p, limit: 50 })}`);
+  health = () => this.c.request<HealthDto>('/admin/health');
+  notificationOverview = () => this.c.request<NotificationOverviewDto>('/admin/notifications');
+  adminWorkspace = (id: string) =>
+    this.c.request<AdminWorkspaceDetailDto>(`/admin/workspaces/${enc(id)}`);
+  reactivateUser = (id: string, assignments: { workspaceId: string; role: Role }[]) =>
+    this.c.request(`/admin/users/${enc(id)}/status`, {
+      method: 'POST',
+      body: { action: 'reactivate', assignments },
+    });
+  users = (
+    p: { status?: string; q?: string; role?: string; workspaceId?: string; offset?: number } = {},
+  ) => this.c.request<PageDto<AdminUserDto>>(`/admin/users${qs({ ...p, limit: 30 })}`);
   user = (id: string) => this.c.request<AdminUserDetailDto>(`/admin/users/${enc(id)}`);
   setUserStatus = (id: string, action: 'suspend' | 'reinstate' | 'revoke' | 'reactivate') =>
     this.c.request(`/admin/users/${enc(id)}/status`, { method: 'POST', body: { action } });
@@ -291,9 +381,7 @@ export class FlowApp {
       body: { workspaceId, role },
     });
   adminWorkspaces = () =>
-    this.c.request<{
-      items: { id: string; name: string; kind: WorkspaceKindDto; memberCount: number }[];
-    }>('/admin/workspaces');
+    this.c.request<{ items: AdminWorkspaceDto[]; personalCount?: number }>('/admin/workspaces');
   invitations = () => this.c.request<{ items: InvitationDto[] }>('/admin/invitations');
   createInvitation = (
     workspaceId: string,

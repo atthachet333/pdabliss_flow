@@ -8,6 +8,9 @@
  *   node scripts/db.mjs deploy   dev|test          apply committed migrations (never resets)
  *   node scripts/db.mjs drift                      committed migrations vs schema (shadow DB)
  *   node scripts/db.mjs whoami   dev|test          database name only (sanity check)
+ *   node scripts/db.mjs sql                        print SQL from committed migrations to the
+ *                                                  schema (shadow replay only; writes nothing,
+ *                                                  used to author a new reviewed migration)
  *
  * Connection strings come from the external secret files (%USERPROFILE%\.pdabliss\flow\
  * dev.env and test.env), are checked by the same rules as apps/api/src/db/guard.ts, and are
@@ -110,7 +113,9 @@ function compare(label, from, to, url, shadow, allowAlias = false) {
   }
   if (result.status === 2) {
     if (allowAlias && isMariaDbJsonDiff(result.stdout)) {
-      console.log(`db: ${label}: Prisma reported only the three MariaDB JSON alias declarations`);
+      console.log(
+        `db: ${label}: Prisma reported only the ${EP02_JSON_COLUMNS.length} known MariaDB JSON alias declarations`,
+      );
       return;
     }
     fail(`${label}: schema differences found`, 2);
@@ -146,7 +151,7 @@ async function verifyJsonColumns(raw, purpose) {
         return `${purpose}: JSON definition differs for ${table}.${column}`;
     }
     console.log(
-      `db: ${purpose}: ${server.version}, nullable utf8mb4_bin JSON with JSON_VALID verified for all three columns`,
+      `db: ${purpose}: ${server.version}, nullable utf8mb4_bin JSON with JSON_VALID verified for all ${EP02_JSON_COLUMNS.length} columns`,
     );
   } finally {
     await connection.end();
@@ -208,6 +213,29 @@ switch (cmd) {
       fail('MariaDB JSON metadata could not be verified');
     }
     console.log('db: no unresolved semantic drift');
+    break;
+  }
+  case 'sql': {
+    // Replays committed migrations into the shadow database only and prints the SQL needed to
+    // reach prisma/schema.prisma. No development or test database is touched.
+    const t = urls('dev');
+    const problem = checkTarget(t.url, 'dev') ?? checkTarget(t.shadow, 'shadow');
+    if (problem) fail(problem);
+    const result = prisma(
+      [
+        'migrate',
+        'diff',
+        '--from-migrations',
+        'prisma/migrations',
+        '--to-schema',
+        'prisma/schema.prisma',
+        '--script',
+      ],
+      { FLOW_PRISMA_URL: t.url, FLOW_PRISMA_SHADOW_URL: t.shadow },
+      true,
+    );
+    if (result.status !== 0) fail(`Prisma diff failed (exit ${result.status ?? 'unknown'})`);
+    process.stdout.write(result.stdout);
     break;
   }
   case 'whoami': {

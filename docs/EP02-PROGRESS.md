@@ -22,3 +22,9 @@ The owner manually verified real LINE authentication on iPhone, secure owner boo
 Session restoration, logout and re-login persistence, complete history, full Owner Console, mobile approval of a second LINE identity, invitation redemption and replay, multi-user privacy, outbound usage review, final real-device regression and final EP02 acceptance remain open. The guarded shutdown check found no recorded FLOW session or listener on the FLOW ports, and shared MariaDB stayed running. Confirmation of canonical LIFF endpoint restoration and webhook disabled remains pending.
 
 Continue in the office with RD01 and iOS WebKit coverage. See the [office handover](EP02-OFFICE-HANDOVER.md), [owner checklist](EP02-OWNER-CHECKLIST.md) and [RD01–RD08 backlog](EP02-REAL-DEVICE-FINDINGS.md).
+
+## EP02 consolidated — 28 Nov 2026 (condominium workstation)
+
+The remaining EP02 work, including the former EP02.2 and EP02.3, was implemented and locally
+verified as one consolidated execution. See [EP02-CONSOLIDATED-REPORT.md](EP02-CONSOLIDATED-REPORT.md).
+Real LINE owner acceptance is still open; see [EP02-FINAL-ACCEPTANCE.md](EP02-FINAL-ACCEPTANCE.md).
