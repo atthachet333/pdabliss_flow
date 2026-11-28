@@ -36,3 +36,18 @@ The checkpoint freezes the current design and defers these findings to the offic
 | RD08 | `formatThaiDateTime` (Buddhist Era, Bangkok) for preview, reminders, history and admin. API values stay ISO UTC.                                                                                                                                                                                                                | Unit tests, including year rollover; no ISO date in the reminder list                   |
 
 Real iPhone LINE LIFF retest of RD01–RD08 remains owner acceptance; see [final acceptance](EP02-FINAL-ACCEPTANCE.md).
+
+## Owner iPhone review (28 Nov 2026, temporary session)
+
+| ID   | Status                                                                                |
+| ---- | ------------------------------------------------------------------------------------- |
+| RD01 | Visual PASS on the reviewed date and time inputs                                      |
+| RD02 | Save observed successfully; keyboard and full accessibility acceptance open → EP04 P3 |
+| RD03 | PASS (observed future default start)                                                  |
+| RD04 | PASS                                                                                  |
+| RD05 | PASS for the action buttons; minor top-content overlap → EP04 P4                      |
+| RD06 | PASS (calculated versus sent wording)                                                 |
+| RD07 | EP03                                                                                  |
+| RD08 | Visual PASS on the reviewed Thai date labels                                          |
+
+See the [EP04 polish backlog](EP04-POLISH-BACKLOG.md).

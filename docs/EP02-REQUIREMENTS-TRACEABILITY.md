@@ -43,3 +43,17 @@ approved roadmap. **N/A-EP03** = truthful not-enabled state shipped; the capabil
 | 27   | Real LINE owner acceptance                                                                | Partial (26 Nov)                | Checklist prepared                                                                                        | [Final acceptance](EP02-FINAL-ACCEPTANCE.md)                      | OWNER (not run)              |
 | 28   | Commit and push                                                                           | —                               | Reviewed checkpoint                                                                                       | Git report                                                        | See report                   |
 | 29   | Documentation                                                                             | —                               | Six new docs; existing docs updated                                                                       | This folder                                                       | PASS                         |
+
+## Owner acceptance update (28 Nov 2026, closure)
+
+| Requirement                                                     | Real-device status                                                                                        |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| RD01, RD03, RD04, RD06, RD08                                    | OWNER PASS (RD01 and RD08 visual)                                                                         |
+| RD02, RD05                                                      | Partially accepted; remainder in EP04 P3 and P4                                                           |
+| 8 Member colours                                                | OWNER PASS (select, save, render; DB-confirmed). Cross-member view not verified                           |
+| 9 Recurrence                                                    | OWNER PASS (create, THIS edit, FUTURE edit DB-confirmed). ALL edit and cancellation not owner-verified    |
+| 10 Bills                                                        | OWNER PASS (monthly, exact amount, per-occurrence paid and suppression). Paid → unpaid not owner-verified |
+| 11–13 Admin centre and dashboard                                | OWNER PASS (14 pages, 13 cards, ADM08 and ADM09 retest). ADM03 visual pass                                |
+| 14 Requests; 15 Offboarding; 17 Activity redaction across users | DEFERRED with AUTH01 (needs a second identity). Local tests pass                                          |
+| 18 Quota                                                        | OWNER PASS (live 0/300 read)                                                                              |
+| 27 Real LINE acceptance                                         | PARTIAL                                                                                                   |

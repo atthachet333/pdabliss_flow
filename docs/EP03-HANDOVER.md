@@ -53,3 +53,28 @@ previous-day, urgent and bill templates) is an EP03 deliverable. Timestamps use
 - Confirmation that the canonical LIFF endpoint is restored and **Use webhook** is off.
 - Outbound sending stays disabled until destination, owner, quota and emergency controls are
   verified with capped, approved recipients.
+
+## 5. Synthetic test data gate (must be satisfied before any EP03 run)
+
+The development database holds 204 future `SCHEDULED` reminder rules on synthetic EP02 test
+records (Test01–Test05). All of them target the owner's private LINE chat. See the [cleanup plan](EP02-FINAL-ACCEPTANCE.md).
+Before the first EP03 worker run against `pdabliss_flow_dev`:
+
+1. The owner either cancels the synthetic series in the app ("ทุกครั้งในรายการนี้") or approves a
+   guarded, audited cleanup. Nothing is deleted without approval.
+2. The worker starts with delivery **disabled**. The first enabled run is a dry run that
+   lists every job it would send. Delivery is enabled only for an explicit recipient
+   allow-list with a small cap.
+3. `reminderEligibility` (stale after 10 minutes, paid, cancelled, revoked, paused) is enforced on
+   every job. Past synthetic reminders can never be "caught up".
+4. Production (`pdabliss_flow`) starts empty in EP05. Dev records are never copied.
+
+## 6. Readiness
+
+EP02 is at **LOCAL PASS / REAL LINE ACCEPTANCE PARTIAL — EP02 CHECKPOINT**. The data contracts,
+the eligibility gate and the admin integration points are ready. EP03 implementation
+requires separate owner authorization. Carry these items forward:
+
+- AUTH01 (second identity) and multi-user privacy acceptance;
+- LIFF and webhook restoration confirmation;
+- the synthetic-data gate above.

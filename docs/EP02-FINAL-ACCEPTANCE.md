@@ -1,31 +1,60 @@
 # EP02 — Final acceptance (real LINE, owner-dependent)
 
-_Prepared 2026-11-28, Asia/Bangkok. Updated the same day with the owner's desktop review
-(below). Each item needs the
-owner's own iPhone or desktop and owner-approved LINE test identities. **No result may be
-recorded as passed without evidence.** Use synthetic appointments and bills only._
+_Prepared 2026-11-28, Asia/Bangkok, and updated the same day with owner evidence from the
+desktop and iPhone sessions. **No result is recorded as passed without evidence.** All
+records are synthetic._
 
-## Status at the EP02 consolidated checkpoint
+## Status at the EP02 closure (28 Nov 2026, evening)
 
-| Item                                                                                      | Status                                                                      |
-| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| LINE login, owner bootstrap, Today/Calendar/Groups/Settings, create, reschedule, previews | PASS — owner-reported, 26 Nov (unchanged)                                   |
-| Close/reopen LIFF, session restoration                                                    | NOT TESTED                                                                  |
-| Logout and re-login persistence                                                           | NOT TESTED                                                                  |
-| Complete appointment history (create + reschedule events)                                 | NOT TESTED                                                                  |
-| Full mobile Owner Console                                                                 | NOT TESTED                                                                  |
-| Desktop Administration Center review (owner, 28 Nov)                                      | PARTIAL — 8/10 owner-reported PASS; ADM08/ADM09 fixed, owner retest pending |
-| External-browser LINE login returning to `/admin` (scenario J)                            | NOT SEPARATELY REPORTED                                                     |
-| Shared workspace creation; invitation creation and sharing                                | PASS — owner-reported, 28 Nov                                               |
-| Second identity: access request → owner approval (AUTH01)                                 | DEFERRED / NOT VERIFIED (owner decision)                                    |
-| Invitation redemption and replay refusal                                                  | NOT TESTED (needs a second identity)                                        |
-| Real multi-user privacy (Today, Calendar, Search, direct URL)                             | NOT TESTED                                                                  |
-| Member colour selection                                                                   | NOT TESTED                                                                  |
-| Recurring appointment creation and scoped edit                                            | NOT TESTED                                                                  |
-| Recurring monthly bill, mark one occurrence paid                                          | NOT TESTED                                                                  |
-| Offboarding behaviour (remove / suspend / revoke / reactivate)                            | NOT TESTED                                                                  |
-| iPhone LIFF regression of RD01–RD06/RD08                                                  | NOT TESTED                                                                  |
-| Canonical LIFF endpoint restored, **Use webhook** off, outbound usage review              | PENDING owner confirmation                                                  |
+**Verdict: LOCAL PASS / REAL LINE ACCEPTANCE PARTIAL — EP02 CHECKPOINT.**
+
+Legend:
+
+- **OWNER PASS:** observed by the owner on a real iPhone in LINE, or on a desktop through the
+  guarded temporary HTTPS session.
+- **DB-CONFIRMED:** a read-only guarded inspection of `pdabliss_flow_dev` agrees with the
+  owner's observation.
+- **LOCAL:** automated evidence only.
+
+Real-device and automated evidence are reported separately.
+
+| Item                                                                              | Real LINE / owner                                                                    | Local automated / database                                                                                                                                   |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| LINE login, owner bootstrap, Today/Calendar/Groups/Settings                       | OWNER PASS (26 and 28 Nov)                                                           | —                                                                                                                                                            |
+| Desktop Administration Center (14 pages, 13 KPI cards, back navigation)           | OWNER PASS (8/10 at first review, then ADM08 and ADM09 retested PASS)                | C8; browser QA 0 findings                                                                                                                                    |
+| ADM08 quota refresh                                                               | OWNER PASS: success message, seconds, 0/300, remaining 300                           | 6 web + 3 API tests                                                                                                                                          |
+| ADM09 health refresh                                                              | OWNER PASS: success message, MariaDB 1 ms, worker and outbound disabled              | Same                                                                                                                                                         |
+| ADM03 header and heading layout                                                   | VISUAL PASS on reviewed screenshots; scroll-and-navigate path **not** owner-verified | Browser checks: 0 findings in two engines                                                                                                                    |
+| Shared workspace creation; invitation creation and sharing                        | OWNER PASS                                                                           | DB: 1 FAMILY workspace; 1 invitation (expired 07:44, unused)                                                                                                 |
+| Member colour select, save, immediate render                                      | OWNER PASS (indigo → jade)                                                           | DB-CONFIRMED: `colorToken = jade` stored server-side                                                                                                         |
+| Member colour after a fresh session; seen by another member; on shared cards      | NOT VERIFIED (single account)                                                        | C1 (persistence across restart, other-member view, card mark)                                                                                                |
+| Test01 one-off appointment, edit 10:00 → 13:00, history, reminders                | OWNER PASS                                                                           | DB-CONFIRMED: 29 Nov 06:00, 30 Nov 06:00, 10:00, 12:00; events CREATED, RESCHEDULED                                                                          |
+| Test02 weekly recurrence; calendar and history                                    | OWNER PASS                                                                           | DB-CONFIRMED: 53 occurrences, no duplicates                                                                                                                  |
+| Test02 edit "this occurrence only" (7 Dec → 14:00)                                | OWNER PASS                                                                           | DB-CONFIRMED: exception flag, audit `appointment.updated`                                                                                                    |
+| Test02 edit of 14 Dec → 11:00                                                     | Observed propagation                                                                 | DB-CONFIRMED scope **FUTURE**: audit `series.updated {kind: FUTURE, count: 51}`; old series ended 13 Dec; new series from 14 Dec; 51 × 11:00; exception kept |
+| Recurrence "entire series" edit; any recurring cancellation                       | NOT VERIFIED by owner                                                                | C3, C4 (both stores)                                                                                                                                         |
+| Test03 monthly bill 599.50, December paid only, reminders suppressed              | OWNER PASS                                                                           | DB-CONFIRMED: 24 occurrences, exactly `599.50`, December PAID with 2 SUPPRESSED rules, later months SCHEDULED                                                |
+| Bill paid → unpaid correction                                                     | NOT VERIFIED by owner                                                                | C5                                                                                                                                                           |
+| Test04 last-day-of-month bill 1,250.75                                            | OWNER PASS (31 Dec, 31 Jan)                                                          | DB-CONFIRMED: 28 Feb 2027, 31 Mar, 30 Apr, **29 Feb 2028**; 23 occurrences, no duplicates. Real-device view of February not done                             |
+| Test05 private appointment                                                        | OWNER PASS (single account)                                                          | —                                                                                                                                                            |
+| Cross-account privacy; Activity Center redaction for another user's private items | NOT VERIFIED (needs a second identity)                                               | C6, C7 on real MariaDB: no unauthorized title, amount, notes, creator or raw IDs; direct API 404                                                             |
+| Appointment history (upcoming, past, cancelled empty state, badges)               | OWNER PASS                                                                           | —                                                                                                                                                            |
+| Actual cancellation and its history entry                                         | NOT VERIFIED by owner                                                                | C4                                                                                                                                                           |
+| Close/reopen LIFF; logout and re-login persistence                                | NOT VERIFIED                                                                         | S9 restart persistence                                                                                                                                       |
+| Second identity (AUTH01); invitation redemption and replay; real offboarding      | **DEFERRED / NOT VERIFIED** (owner decision)                                         | S1, S2, S2b, C10, C11                                                                                                                                        |
+| Mobile Owner Console (full)                                                       | Entry observed only                                                                  | Existing tests                                                                                                                                               |
+| Canonical LIFF endpoint restored and **Use webhook** OFF after this session       | **PENDING owner confirmation**                                                       | Session stopped and verified (see below)                                                                                                                     |
+
+### RD statuses from the owner's iPhone review
+
+- RD01: visual PASS.
+- RD02: save observed; keyboard and full accessibility not yet accepted.
+- RD03: PASS.
+- RD04: PASS.
+- RD05: PASS for the action buttons; minor top-content overlap goes to the EP04 polish backlog.
+- RD06: PASS.
+- RD07: EP03.
+- RD08: visual PASS.
 
 ## Owner desktop review and findings register (28 Nov 2026)
 
@@ -120,3 +149,60 @@ Restore the LIFF Endpoint URL to `https://flow.pdabliss.com/`. Confirm **Use web
 Review outbound usage, which should show zero sends from FLOW. Do not stop shared MariaDB.
 Record the observed results, with dates and sanitized screenshots, in this file before declaring
 EP02 complete.
+
+## Closure evidence (28 Nov 2026)
+
+**Database corroboration.** Script `.qa/ep02-closure/inspect-dev.mjs` (Git-ignored) ran
+read-only `SELECT`s on the guarded `pdabliss_flow_dev`. It printed only synthetic titles and no
+IDs or LINE identifiers. Findings:
+
+- 103 appointments, all synthetic EP02 tests; no other records.
+- 1 active owner; 1 private-chat destination.
+- 0 duplicate `(series, occurrenceDate)` pairs.
+
+**Verification of the current repository** (`fa98182`, after the session was stopped):
+
+- `ep02-verify.ps1`: 31 PASS, 1 intentional skip, exit 0.
+- 309/309 automated tests plus 49/49 real MariaDB tests (C1–C12 included).
+- npm audits 0. Secret scans pass.
+
+**Temporary session shutdown.** `ep01-integration.ps1 -Stop` stopped only the recorded
+gateway, tunnel and API.
+
+- `-Status`: no session recorded.
+- Ports 6767–6769 free; no `cloudflared` process.
+- The old tunnel URL returns 502 at Cloudflare's edge.
+- MariaDB is still running on 3306. No other service was touched.
+
+**LINE configuration restoration** is PENDING the owner's confirmation. Required: LIFF
+Endpoint URL = `https://flow.pdabliss.com/`, Messaging API **Use webhook = OFF**, and an
+outbound usage review (expected: zero FLOW sends).
+
+## Synthetic test data — safety and cleanup plan (owner approval required)
+
+The dev database holds 204 future `SCHEDULED` reminder rules on synthetic records. All of
+them target the owner's own private LINE chat:
+
+| Item   | Future reminders | Last fire time |
+| ------ | ---------------: | -------------- |
+| Test02 |              106 | 29 Nov 2027    |
+| Test03 |               46 | November 2028  |
+| Test04 |               46 | October 2028   |
+| Test01 |                4 | 30 Nov 2026    |
+| Test05 |                2 | 30 Nov 2026    |
+
+EP02 cannot send anything. The risk starts only if an EP03 worker runs against this dev database.
+
+1. **Quarantine without deletion.** Before any EP03 dev worker run, the owner cancels the
+   synthetic series in the app with "ยกเลิก → ทุกครั้งในรายการนี้":
+   Test02 (both series), Test03 and Test04. Test01 and Test05 become past and
+   ineligible (stale) after 30 Nov. Cancelled rows and their history stay, and nothing is
+   hard-deleted by an admin. The owner can also approve a guarded, audited cleanup instead.
+   No deletion happens without explicit approval.
+2. **EP03 launch gate** (see [EP03 handover](EP03-HANDOVER.md)): the worker starts with
+   delivery disabled, an explicit recipient allow-list and the `reminderEligibility` stale
+   rule. A first enabled run must list, as a dry run, every job it would send.
+3. **Production isolation.** Production (`pdabliss_flow`) is created empty in EP05. Dev
+   records are never copied.
+4. The expired, unused synthetic invitation and the `กลุ่มงานทดสอบ` workspace can stay. They
+   grant nothing and send nothing.

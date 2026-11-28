@@ -154,3 +154,27 @@ Canonical LIFF endpoint and webhook-off confirmation remain pending with the own
 ## J. EP03 handover
 
 See [EP03-HANDOVER.md](EP03-HANDOVER.md).
+
+## Addendum — owner acceptance and closure (28 Nov 2026)
+
+- **Owner-observed PASS:**
+  - Desktop Administration Center, including the ADM08 and ADM09 retest; ADM03 is a visual
+    pass only.
+  - Member colour selection.
+  - Test01 one-off appointment with edit and reminders.
+  - Test02 weekly series with a single-occurrence exception and a FUTURE edit (scope
+    confirmed by the database audit).
+  - Test03 monthly bill with December paid and its reminders suppressed.
+  - Test04 last-day-of-month bill.
+  - Test05 private appointment.
+  - History, and RD01, RD03, RD04, RD06 and RD08 (RD02 and RD05 partially).
+- **Hotfix `fa98182`:** ADM03, ADM08 and ADM09, with 9 new tests.
+- **Current verification:** 31 PASS + 1 skip; 358/358 tests (309 + 49 MariaDB); 0 audit
+  findings; secret scans pass.
+- **Deferred or unverified:** AUTH01, invitation redemption and replay, multi-user privacy,
+  real offboarding, session restoration and re-login, colour persistence seen by another
+  member, entire-series edit, recurring cancellation, paid → unpaid correction.
+- The temporary session is stopped. LIFF and webhook restoration awaits the owner's
+  confirmation. Synthetic-data cleanup needs the owner's approval.
+
+Details are in [final acceptance](EP02-FINAL-ACCEPTANCE.md).
