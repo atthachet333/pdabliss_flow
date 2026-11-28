@@ -76,5 +76,5 @@ the eligibility gate and the admin integration points are ready. EP03 implementa
 requires separate owner authorization. Carry these items forward:
 
 - AUTH01 (second identity) and multi-user privacy acceptance;
-- LIFF and webhook restoration confirmation;
+- LIFF and webhook restoration (confirmed by the owner on 28 Nov: canonical endpoint, webhook OFF, 0/300). Recheck both before any EP03 session;
 - the synthetic-data gate above.

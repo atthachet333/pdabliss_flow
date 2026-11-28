@@ -34,6 +34,6 @@ Real LINE owner acceptance is still open; see [EP02-FINAL-ACCEPTANCE.md](EP02-FI
 The owner's desktop and iPhone LINE evidence is consolidated and corroborated by a read-only
 dev-database inspection. ADM03, ADM08 and ADM09 were fixed (`fa98182`). The session was stopped,
 and the verifier passes on the current code. AUTH01 and the multi-user scenarios are deferred.
-LIFF and webhook restoration awaits the owner. Verdict: **LOCAL PASS / REAL LINE ACCEPTANCE
+LIFF and webhook restoration was then confirmed by the owner (webhook OFF, consumption 0/300). Verdict: **LOCAL PASS / REAL LINE ACCEPTANCE
 PARTIAL — EP02 CHECKPOINT**. See [final acceptance](EP02-FINAL-ACCEPTANCE.md) and the
 [EP04 polish backlog](EP04-POLISH-BACKLOG.md).

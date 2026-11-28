@@ -174,7 +174,7 @@ See [EP03-HANDOVER.md](EP03-HANDOVER.md).
 - **Deferred or unverified:** AUTH01, invitation redemption and replay, multi-user privacy,
   real offboarding, session restoration and re-login, colour persistence seen by another
   member, entire-series edit, recurring cancellation, paid → unpaid correction.
-- The temporary session is stopped. LIFF and webhook restoration awaits the owner's
+- The temporary session is stopped. LIFF and webhook restoration was later CONFIRMED by the owner (LIFF `https://flow.pdabliss.com/`, webhook OFF, consumption 0/300). Before that, it awaited the owner's
   confirmation. Synthetic-data cleanup needs the owner's approval.
 
 Details are in [final acceptance](EP02-FINAL-ACCEPTANCE.md).
